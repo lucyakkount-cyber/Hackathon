@@ -360,6 +360,8 @@ async function initializeManagers() {
   }
 }
 
+// In App.vue - Update the loadVRMModel function
+
 async function loadVRMModel() {
   try {
     const vrmConfig = configManager.getVRMConfig()
@@ -370,18 +372,6 @@ async function loadVRMModel() {
 
     // Initialize animation manager
     animationManager = new AnimationManager(vrm)
-
-    // Load animations (gestures + idle)
-    const animations = await vrmLoader.loadDefaultAnimations(vrm)
-
-    // Set gesture animations
-    Object.entries(animations).forEach(([name, animation]) => {
-      if (name === 'idle') {
-        animationManager.setIdleAnimation(animation)
-      } else {
-        animationManager.setGestureAnimation(name, animation)
-      }
-    })
 
     // Load and set HappyIdle.fbx
     try {
@@ -420,7 +410,7 @@ async function loadVRMModel() {
       animationManager?.update(delta)
     })
 
-    console.log('✅ VRM model loaded with all animations')
+    console.log('✅ VRM model loaded with animations')
 
   } catch (error) {
     console.error('❌ Failed to load VRM model:', error)
@@ -428,11 +418,7 @@ async function loadVRMModel() {
   }
 }
 
-function setupDragAndDrop() {
-  sceneManager.setupDragAndDrop(async (file) => {
-    await handleVRMFileDrop(file)
-  })
-}
+// Also update handleVRMFileDrop function
 
 async function handleVRMFileDrop(file) {
   try {
@@ -468,16 +454,6 @@ async function handleVRMFileDrop(file) {
 
     loadingProgress.value = 80
 
-    // Load animations
-    const animations = await vrmLoader.loadDefaultAnimations(vrm)
-    Object.entries(animations).forEach(([name, animation]) => {
-      if (name === 'idle') {
-        animationManager.setIdleAnimation(animation)
-      } else {
-        animationManager.setGestureAnimation(name, animation)
-      }
-    })
-
     // Try to load HappyIdle
     try {
       const idleData = await vrmLoader.loadAnimationFromFBX('/animations/HappyIdle.fbx')
@@ -505,6 +481,14 @@ async function handleVRMFileDrop(file) {
     showToast('Load Failed', error.message, 'error', 5000)
   }
 }
+
+function setupDragAndDrop() {
+  sceneManager.setupDragAndDrop(async (file) => {
+    await handleVRMFileDrop(file)
+  })
+}
+
+
 
 async function sendMessage() {
   if (!userInput.value.trim() || isProcessing.value || !systemReady.value) return
@@ -601,6 +585,8 @@ onBeforeUnmount(() => {
   systemReady.value = false
   console.log('✅ Cleanup complete')
 })
+
+
 </script>
 
 <style scoped>

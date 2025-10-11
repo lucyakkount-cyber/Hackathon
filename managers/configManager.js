@@ -66,7 +66,7 @@ export class ConfigManager {
         ],
       },
       audio_config: {
-        tts_url: '   https://furnishings-durable-sessions-tenant.trycloudflare.com/tts',
+        tts_url: this.config.sovits_ping_config?.tts,
         speech_recognition_lang: 'en-US',
         audio_context_options: {
           sampleRate: 44100,
@@ -154,7 +154,7 @@ export class ConfigManager {
 
   getAudioConfig() {
     return this.get('audio_config', {
-      tts_url: '   https://furnishings-durable-sessions-tenant.trycloudflare.com/tts',
+      tts_url: '  https://mall-bless-not-disturbed.trycloudflare.com/',
       speech_recognition_lang: 'en-US',
       audio_context_options: {
         sampleRate: 44100,
@@ -163,10 +163,7 @@ export class ConfigManager {
   }
 
   getTTSUrl() {
-    return this.get(
-      'audio_config.tts_url',
-      '   https://furnishings-durable-sessions-tenant.trycloudflare.com/tts',
-    )
+    return this.get('audio_config.tts_url', '  https://mall-bless-not-disturbed.trycloudflare.com/')
   }
 
   getSpeechRecognitionLang() {

@@ -4,7 +4,7 @@ import axios from 'axios'
 export function useTTS(charConfig) {
   async function sovitsGen(text, config) {
     try {
-      const ttsUrl = '   https://furnishings-durable-sessions-tenant.trycloudflare.com/tts'
+      const ttsUrl = '  https://mall-bless-not-disturbed.trycloudflare.com/'
       const payload = {
         text,
         ref_audio_path: config.sovits_ping_config?.ref_audio_path,

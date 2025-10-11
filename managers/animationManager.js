@@ -1,30 +1,28 @@
-// managers/animationManager.js - COMPLETE WORKING VERSION (ALL BUGS FIXED)
+// managers/animationManager.js - COMPLETE FIXED VERSION
+
 import * as THREE from 'three'
 
 export class AnimationManager {
   constructor(vrm) {
     this.vrm = vrm
     this.currentMixer = null
-    this.currentAnimationAction = null
     this.idleAnimation = null
     this.idleAction = null
-    this.gestureAnimations = {}
 
-    // All intervals
+    // Intervals
     this.blinkInterval = null
     this.breatheInterval = null
     this.subtleMovementInterval = null
-    this.handGestureInterval = null
     this.eyeMovementInterval = null
-    this.speakingHandInterval = null
-    this.speakingHeadInterval = null
-    this.gestureTimeout = null
+    this.speakingMotionInterval = null
 
     // States
     this.isPlayingSequence = false
     this.isSpeaking = false
-    this.activeAnimations = new Set()
     this.currentTransition = null
+
+    // Expression mappings - auto-detect based on VRM
+    this.detectedExpressions = {}
 
     this.EXPRESSIONS = {
       neutral: ['neutral'],
@@ -45,11 +43,45 @@ export class AnimationManager {
       thinking: ['neutral'],
       shy: ['blink', 'happy']
     }
+
+    // Auto-detect available expressions on init
+    this.detectAvailableExpressions()
+  }
+
+  // Detect which expressions actually exist on this VRM
+  detectAvailableExpressions() {
+    if (!this.vrm?.expressionManager) return
+
+    const allExpressions = this.vrm.expressionManager.expressions.map(exp => exp.name)
+    console.log('Available VRM expressions:', allExpressions.join(', '))
+
+    // Build a map of what expressions we can use
+    this.detectedExpressions = {}
+
+    Object.entries(this.EXPRESSIONS).forEach(([key, fallbacks]) => {
+      for (const fallback of fallbacks) {
+        const found = allExpressions.find(exp =>
+          exp.toLowerCase() === fallback.toLowerCase()
+        )
+        if (found) {
+          this.detectedExpressions[key] = found
+          break
+        }
+      }
+    })
+
+    console.log('Detected usable expressions:', this.detectedExpressions)
+  }
+
+  // Get the actual expression name to use for this VRM
+  getExpressionName(expressionKey) {
+    return this.detectedExpressions[expressionKey] || expressionKey
   }
 
   updateVRM(newVrm) {
     this.cleanup()
     this.vrm = newVrm
+    this.detectAvailableExpressions()
     this.startNaturalIdle()
 
     if (this.idleAnimation) {
@@ -62,14 +94,9 @@ export class AnimationManager {
     console.log('✅ Idle animation set')
   }
 
-  setGestureAnimation(name, animation) {
-    this.gestureAnimations[name] = animation
-    console.log('✅ Gesture animation loaded:', name)
-  }
-
   // ==================== IDLE ANIMATION CONTROL ====================
 
-startIdleAnimation() {
+  startIdleAnimation() {
     if (!this.idleAnimation || !this.vrm) {
       console.log('⚠️ No idle animation, using natural idle only')
       this.startNaturalIdle()
@@ -84,14 +111,13 @@ startIdleAnimation() {
 
     this.idleAction = this.currentMixer.clipAction(this.idleAnimation)
     this.idleAction.setLoop(THREE.LoopRepeat)
-    this.idleAction.setEffectiveWeight(0.15) // REDUCED: Very subtle for portrait
-    this.idleAction.timeScale = 0.7 // Slower for smoother motion
+    this.idleAction.setEffectiveWeight(0.15)
+    this.idleAction.timeScale = 0.7
     this.idleAction.play()
 
-    console.log('✅ HappyIdle.fbx started (weight: 0.15, speed: 0.7)')
+    console.log('✅ Idle animation started')
 
-    // Don't start natural animations if HappyIdle is active
-    // Only do blinking and breathing
+    // Only blinking and breathing during idle
     this.startEnhancedBlinking()
     this.startSubtleBreathing()
   }
@@ -105,17 +131,15 @@ startIdleAnimation() {
         }
       }, 300)
       this.idleAction = null
-      console.log('⏸️ HappyIdle.fbx stopped')
+      console.log('⏸️ Idle animation stopped')
     }
   }
 
   pauseIdleForSpeaking() {
     if (this.idleAction) {
       this.idleAction.stop()
-      console.log('🗣️ HappyIdle STOPPED for speaking')
+      console.log('🗣️ Idle paused for speaking')
     }
-
-    // CRITICAL: Stop ALL natural idle animations
     this.stopAllNaturalAnimations()
   }
 
@@ -123,10 +147,8 @@ startIdleAnimation() {
     if (this.idleAction && this.idleAnimation) {
       this.idleAction.reset()
       this.idleAction.play()
-      console.log('▶️ HappyIdle RESUMED after speaking')
+      console.log('▶️ Idle resumed after speaking')
     }
-
-    // Restart natural animations
     this.startNaturalIdle()
   }
 
@@ -135,44 +157,35 @@ startIdleAnimation() {
   startNaturalIdle() {
     if (!this.vrm) return
 
-    // Always do blinking and breathing
     this.startEnhancedBlinking()
     this.startSubtleBreathing()
 
-    // Only do these if NOT speaking and NO idle animation
     if (!this.isSpeaking && !this.idleAnimation) {
       this.startMinimalHeadMovements()
-      this.startExpressiveHandGestures()
     }
 
     console.log('✨ Natural idle started')
   }
 
   stopAllNaturalAnimations() {
-    // Stop head movements
     if (this.subtleMovementInterval) {
       clearInterval(this.subtleMovementInterval)
       this.subtleMovementInterval = null
     }
 
-    // Stop hand gestures
-    if (this.handGestureInterval) {
-      clearInterval(this.handGestureInterval)
-      this.handGestureInterval = null
-    }
-
-    // Stop eye movements
     if (this.eyeMovementInterval) {
       clearInterval(this.eyeMovementInterval)
       this.eyeMovementInterval = null
     }
 
-    console.log('🛑 All natural animations stopped')
+    console.log('🛑 Natural animations stopped')
   }
 
   startEnhancedBlinking() {
     if (!this.vrm?.expressionManager) return
     if (this.blinkInterval) clearTimeout(this.blinkInterval)
+
+    const blinkExpression = this.getExpressionName('neutral')
 
     const doBlink = () => {
       if (!this.vrm?.expressionManager) {
@@ -182,35 +195,43 @@ startIdleAnimation() {
 
       const intensity = 0.9 + Math.random() * 0.1
       const blinkDuration = 60 + Math.random() * 40
-      const isDoubleBlink = Math.random() < 0.2
+      const isDoubleBlink = Math.random() < 0.15
 
-      this.vrm.expressionManager.setValue('blink', intensity)
-      this.vrm.expressionManager.update()
+      // Try blink expression first, fallback to neutral
+      let blinkExpr = 'blink'
+      if (!this.detectedExpressions[blinkExpr] && this.vrm.expressionManager.expressions.find(e => e.name === 'blink') === undefined) {
+        blinkExpr = blinkExpression
+      }
 
-      setTimeout(() => {
-        if (this.vrm?.expressionManager) {
-          this.vrm.expressionManager.setValue('blink', 0)
-          this.vrm.expressionManager.update()
+      if (this.vrm.expressionManager.expressions.find(e => e.name === blinkExpr)) {
+        this.vrm.expressionManager.setValue(blinkExpr, intensity)
+        this.vrm.expressionManager.update()
 
-          if (isDoubleBlink) {
-            setTimeout(() => {
-              if (this.vrm?.expressionManager) {
-                this.vrm.expressionManager.setValue('blink', intensity * 0.85)
-                this.vrm.expressionManager.update()
-                setTimeout(() => {
-                  if (this.vrm?.expressionManager) {
-                    this.vrm.expressionManager.setValue('blink', 0)
-                    this.vrm.expressionManager.update()
-                  }
-                }, blinkDuration * 0.6)
-              }
-            }, 120)
+        setTimeout(() => {
+          if (this.vrm?.expressionManager) {
+            this.vrm.expressionManager.setValue(blinkExpr, 0)
+            this.vrm.expressionManager.update()
+
+            if (isDoubleBlink) {
+              setTimeout(() => {
+                if (this.vrm?.expressionManager) {
+                  this.vrm.expressionManager.setValue(blinkExpr, intensity * 0.85)
+                  this.vrm.expressionManager.update()
+                  setTimeout(() => {
+                    if (this.vrm?.expressionManager) {
+                      this.vrm.expressionManager.setValue(blinkExpr, 0)
+                      this.vrm.expressionManager.update()
+                    }
+                  }, blinkDuration * 0.6)
+                }
+              }, 120)
+            }
           }
-        }
 
-        const nextBlink = 2000 + Math.random() * 3000
-        this.blinkInterval = setTimeout(doBlink, nextBlink)
-      }, blinkDuration)
+          const nextBlink = 2000 + Math.random() * 3000
+          this.blinkInterval = setTimeout(doBlink, nextBlink)
+        }, blinkDuration)
+      }
     }
 
     doBlink()
@@ -259,9 +280,9 @@ startIdleAnimation() {
 
       phase += 0.004
 
-      const headSway = Math.sin(phase * 0.4) * 0.015
-      const headTilt = Math.cos(phase * 0.3) * 0.012
-      const headNod = Math.sin(phase * 0.2) * 0.01
+      const headSway = Math.sin(phase * 0.4) * 0.012
+      const headTilt = Math.cos(phase * 0.3) * 0.01
+      const headNod = Math.sin(phase * 0.2) * 0.008
 
       if (head) {
         head.rotation.y = baseHead.y + headSway
@@ -270,264 +291,68 @@ startIdleAnimation() {
       }
 
       if (neck && baseNeck) {
-        neck.rotation.x = baseNeck.x + Math.sin(phase * 0.15) * 0.008
+        neck.rotation.x = baseNeck.x + Math.sin(phase * 0.15) * 0.006
       }
     }, 50)
-  }
-
-  startExpressiveHandGestures() {
-    if (!this.vrm) return
-    if (this.handGestureInterval) clearInterval(this.handGestureInterval)
-
-    setTimeout(() => {
-      const leftUpperArm = this.vrm.humanoid?.getNormalizedBoneNode('leftUpperArm')
-      const rightUpperArm = this.vrm.humanoid?.getNormalizedBoneNode('rightUpperArm')
-      const leftLowerArm = this.vrm.humanoid?.getNormalizedBoneNode('leftLowerArm')
-      const rightLowerArm = this.vrm.humanoid?.getNormalizedBoneNode('rightLowerArm')
-      const leftHand = this.vrm.humanoid?.getNormalizedBoneNode('leftHand')
-      const rightHand = this.vrm.humanoid?.getNormalizedBoneNode('rightHand')
-
-      if (!leftUpperArm || !rightUpperArm) return
-
-      const baseLeft = {
-        upperArm: leftUpperArm.rotation.clone(),
-        lowerArm: leftLowerArm?.rotation.clone(),
-        hand: leftHand?.rotation.clone()
-      }
-      const baseRight = {
-        upperArm: rightUpperArm.rotation.clone(),
-        lowerArm: rightLowerArm?.rotation.clone(),
-        hand: rightHand?.rotation.clone()
-      }
-
-      let phase = 0
-
-      this.handGestureInterval = setInterval(() => {
-        if (this.isPlayingSequence || this.isSpeaking) return
-
-        phase += 0.01
-
-        const leftHandMove = Math.sin(phase * 0.6) * 0.15
-        const rightHandMove = Math.sin(phase * 0.6 + Math.PI * 0.6) * 0.15
-        const fingerCurl = Math.sin(phase * 0.8) * 0.1
-
-        if (leftHand) {
-          leftHand.rotation.z = baseLeft.hand.z + leftHandMove
-          leftHand.rotation.x = baseLeft.hand.x + fingerCurl
-        }
-        if (leftLowerArm && baseLeft.lowerArm) {
-          leftLowerArm.rotation.y = baseLeft.lowerArm.y + Math.sin(phase * 0.5) * 0.08
-        }
-        if (leftUpperArm) {
-          leftUpperArm.rotation.x = baseLeft.upperArm.x + Math.sin(phase * 0.4) * 0.06
-        }
-
-        if (rightHand) {
-          rightHand.rotation.z = baseRight.hand.z + rightHandMove
-          rightHand.rotation.x = baseRight.hand.x + fingerCurl
-        }
-        if (rightLowerArm && baseRight.lowerArm) {
-          rightLowerArm.rotation.y = baseRight.lowerArm.y - Math.sin(phase * 0.5) * 0.08
-        }
-        if (rightUpperArm) {
-          rightUpperArm.rotation.x = baseRight.upperArm.x + Math.sin(phase * 0.4 + Math.PI) * 0.06
-        }
-      }, 50)
-
-      console.log('✅ Hand gestures started')
-    }, 300)
   }
 
   // ==================== SPEAKING ANIMATIONS ====================
 
   startSpeakingAnimation() {
     this.isSpeaking = true
-
-    // Stop HappyIdle and natural animations
     this.pauseIdleForSpeaking()
-
-    // Start expressive speaking gestures
-    this.startSpeakingHandGestures()
-    this.startSpeakingHeadMovements()
-
     console.log('🗣️ Speaking started')
+
+    // Get relevant bones
+    const leftUpperArm = this.vrm.humanoid?.getNormalizedBoneNode('leftUpperArm')
+    const rightUpperArm = this.vrm.humanoid?.getNormalizedBoneNode('rightUpperArm')
+    const leftLowerArm = this.vrm.humanoid?.getNormalizedBoneNode('leftLowerArm')
+    const rightLowerArm = this.vrm.humanoid?.getNormalizedBoneNode('rightLowerArm')
+    const chest = this.vrm.humanoid?.getNormalizedBoneNode('upperChest') || this.vrm.humanoid?.getNormalizedBoneNode('chest')
+
+    if (!leftUpperArm || !rightUpperArm) {
+      console.warn('⚠️ Arm bones not found in VRM!')
+      return
+    }
+
+    let t = 0
+    const armAmp = 0.25    // amplitude
+    const armSpeed = 3.0   // speed
+    const chestAmp = 0.1
+
+    const animateLimbMovement = () => {
+      if (!this.isSpeaking) return // stop when speech ends
+
+      t += 0.05
+
+      // Gentle waving
+      const wave = Math.sin(t * armSpeed) * armAmp
+      const counter = Math.sin(t * armSpeed + Math.PI) * armAmp * 0.8
+
+      leftUpperArm.rotation.z = wave
+      rightUpperArm.rotation.z = -wave
+
+      if (leftLowerArm) leftLowerArm.rotation.z = wave * 0.5
+      if (rightLowerArm) rightLowerArm.rotation.z = -wave * 0.5
+
+      if (chest) chest.rotation.y = Math.sin(t * armSpeed * 0.5) * chestAmp
+
+      requestAnimationFrame(animateLimbMovement)
+    }
+
+    animateLimbMovement()
   }
 
   stopSpeakingAnimation() {
     this.isSpeaking = false
 
-    // Stop speaking gestures
-    this.stopSpeakingHandGestures
-    this.stopSpeakingHeadMovements
+    if (this.speakingMotionInterval) {
+      clearInterval(this.speakingMotionInterval)
+      this.speakingMotionInterval = null
+    }
 
-    // Resume idle
     this.resumeIdleAfterSpeaking()
-
     console.log('🔇 Speaking stopped')
-  }
-
-  startSpeakingHandGestures() {
-    if (!this.vrm) return
-    if (this.speakingHandInterval) clearInterval(this.speakingHandInterval)
-
-    const leftUpperArm = this.vrm.humanoid?.getNormalizedBoneNode('leftUpperArm')
-    const rightUpperArm = this.vrm.humanoid?.getNormalizedBoneNode('rightUpperArm')
-    const leftLowerArm = this.vrm.humanoid?.getNormalizedBoneNode('leftLowerArm')
-    const rightLowerArm = this.vrm.humanoid?.getNormalizedBoneNode('rightLowerArm')
-    const leftHand = this.vrm.humanoid?.getNormalizedBoneNode('leftHand')
-    const rightHand = this.vrm.humanoid?.getNormalizedBoneNode('rightHand')
-
-    if (!leftUpperArm || !rightUpperArm) return
-
-    // IMPORTANT: Capture CURRENT position as base (not clone)
-    const baseLeft = {
-      upperArm: {
-        x: leftUpperArm.rotation.x,
-        y: leftUpperArm.rotation.y,
-        z: leftUpperArm.rotation.z
-      },
-      lowerArm: leftLowerArm ? {
-        x: leftLowerArm.rotation.x,
-        y: leftLowerArm.rotation.y,
-        z: leftLowerArm.rotation.z
-      } : null,
-      hand: leftHand ? {
-        x: leftHand.rotation.x,
-        y: leftHand.rotation.y,
-        z: leftHand.rotation.z
-      } : null
-    }
-
-    const baseRight = {
-      upperArm: {
-        x: rightUpperArm.rotation.x,
-        y: rightUpperArm.rotation.y,
-        z: rightUpperArm.rotation.z
-      },
-      lowerArm: rightLowerArm ? {
-        x: rightLowerArm.rotation.x,
-        y: rightLowerArm.rotation.y,
-        z: rightLowerArm.rotation.z
-      } : null,
-      hand: rightHand ? {
-        x: rightHand.rotation.x,
-        y: rightHand.rotation.y,
-        z: rightHand.rotation.z
-      } : null
-    }
-
-    let phase = 0
-
-    this.speakingHandInterval = setInterval(() => {
-      if (!this.isSpeaking) return
-
-      phase += 0.12 // Fast for expressiveness
-
-      // VERY EXPRESSIVE hand movements during speech
-      const leftMove = Math.sin(phase) * 0.35
-      const rightMove = Math.sin(phase + Math.PI * 0.5) * 0.35
-      const emphasis = Math.sin(phase * 1.8) * 0.25
-      const wave = Math.sin(phase * 2.2) * 0.15
-
-      // Left hand - STAYING AT BASE POSITION + movement
-      if (leftHand) {
-        leftHand.rotation.z = baseLeft.hand.z + leftMove
-        leftHand.rotation.x = baseLeft.hand.x + Math.cos(phase * 1.5) * 0.2
-        leftHand.rotation.y = baseLeft.hand.y + emphasis * 0.7
-      }
-      if (leftLowerArm && baseLeft.lowerArm) {
-        leftLowerArm.rotation.y = baseLeft.lowerArm.y + Math.sin(phase * 1.2) * 0.15
-        leftLowerArm.rotation.x = baseLeft.lowerArm.x + emphasis * 0.9
-        leftLowerArm.rotation.z = baseLeft.lowerArm.z + wave * 0.5
-      }
-      if (leftUpperArm) {
-        leftUpperArm.rotation.x = baseLeft.upperArm.x + Math.sin(phase * 0.8) * 0.12
-        leftUpperArm.rotation.y = baseLeft.upperArm.y + Math.cos(phase * 0.7) * 0.08
-        leftUpperArm.rotation.z = baseLeft.upperArm.z + Math.cos(phase * 0.9) * 0.08
-      }
-
-      // Right hand - STAYING AT BASE POSITION + movement
-      if (rightHand) {
-        rightHand.rotation.z = baseRight.hand.z + rightMove
-        rightHand.rotation.x = baseRight.hand.x + Math.cos(phase * 1.5 + Math.PI) * 0.2
-        rightHand.rotation.y = baseRight.hand.y - emphasis * 0.7
-      }
-      if (rightLowerArm && baseRight.lowerArm) {
-        rightLowerArm.rotation.y = baseRight.lowerArm.y - Math.sin(phase * 1.2) * 0.15
-        rightLowerArm.rotation.x = baseRight.lowerArm.x - emphasis * 0.9
-        rightLowerArm.rotation.z = baseRight.lowerArm.z - wave * 0.5
-      }
-      if (rightUpperArm) {
-        rightUpperArm.rotation.x = baseRight.upperArm.x + Math.sin(phase * 0.8 + Math.PI) * 0.12
-        rightUpperArm.rotation.y = baseRight.upperArm.y + Math.cos(phase * 0.7 + Math.PI) * 0.08
-        rightUpperArm.rotation.z = baseRight.upperArm.z - Math.cos(phase * 0.9) * 0.08
-      }
-    }, 50)
-
-    console.log('✅ Speaking hand gestures started (ENHANCED)')
-  }
-
-  stopSpeakingHandGestures() {
-    if (this.speakingHandInterval) {
-      clearInterval(this.speakingHandInterval)
-      this.speakingHandInterval = null
-      console.log('🛑 Speaking hand gestures stopped')
-    }
-  }
-
-  startSpeakingHeadMovements() {
-    if (!this.vrm) return
-    if (this.speakingHeadInterval) clearInterval(this.speakingHeadInterval)
-
-    const head = this.vrm.humanoid?.getNormalizedBoneNode('head')
-    const neck = this.vrm.humanoid?.getNormalizedBoneNode('neck')
-
-    if (!head) return
-
-    // Capture BASE position
-    const baseHead = {
-      x: head.rotation.x,
-      y: head.rotation.y,
-      z: head.rotation.z
-    }
-    const baseNeck = neck ? {
-      x: neck.rotation.x,
-      y: neck.rotation.y,
-      z: neck.rotation.z
-    } : null
-
-    let phase = 0
-
-    this.speakingHeadInterval = setInterval(() => {
-      if (!this.isSpeaking) return
-
-      phase += 0.02
-
-      // Expressive head movements RELATIVE to base position
-      const headNod = Math.sin(phase * 1.3) * 0.1
-      const headTilt = Math.sin(phase * 0.8 + 1) * 0.08
-      const headTurn = Math.sin(phase * 0.6 + 2) * 0.06
-
-      if (head) {
-        head.rotation.x = baseHead.x + headNod
-        head.rotation.y = baseHead.y + headTurn
-        head.rotation.z = baseHead.z + headTilt
-      }
-
-      if (neck && baseNeck) {
-        neck.rotation.x = baseNeck.x + Math.sin(phase * 0.9) * 0.05
-      }
-    }, 50)
-
-    console.log('✅ Speaking head movements started')
-  }
-
-  stopSpeakingHeadMovements() {
-    if (this.speakingHeadInterval) {
-      clearInterval(this.speakingHeadInterval)
-      this.speakingHeadInterval = null
-      console.log('🛑 Speaking head movements stopped')
-    }
   }
 
   // ==================== EXPRESSION SYSTEM ====================
@@ -535,6 +360,8 @@ startIdleAnimation() {
   async setExpression(expression, intensity = 0.7, duration = 400) {
     if (!this.vrm?.expressionManager) return
 
+    // Get the actual expression name for this VRM
+    const mappedExpression = this.getExpressionName(expression)
     const expressions = this.EXPRESSIONS[expression] || [expression]
 
     if (this.currentTransition) {
@@ -545,9 +372,16 @@ startIdleAnimation() {
     const targetValues = {}
 
     expressions.forEach(expr => {
-      startValues[expr] = this.vrm.expressionManager.getValue(expr) || 0
-      targetValues[expr] = Math.min(intensity, 0.95)
+      const mappedExpr = this.getExpressionName(expr)
+      if (this.vrm.expressionManager.expressions.find(e => e.name === mappedExpr)) {
+        startValues[mappedExpr] = this.vrm.expressionManager.getValue(mappedExpr) || 0
+        targetValues[mappedExpr] = Math.min(intensity, 1.0)
+      }
     })
+
+    if (Object.keys(startValues).length === 0) {
+      return // No valid expressions found
+    }
 
     return new Promise((resolve) => {
       const startTime = performance.now()
@@ -557,7 +391,7 @@ startIdleAnimation() {
         const t = Math.min(elapsed / duration, 1)
         const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
 
-        expressions.forEach(expr => {
+        Object.keys(startValues).forEach(expr => {
           const value = startValues[expr] + (targetValues[expr] - startValues[expr]) * eased
           this.vrm.expressionManager.setValue(expr, value)
         })
@@ -681,226 +515,6 @@ startIdleAnimation() {
     })
   }
 
-  // ==================== GESTURE SYSTEM ====================
-
-  async performGesture(gestureType, duration = 1200) {
-    if (!this.vrm || !gestureType || gestureType === 'none') return
-
-    if (this.gestureTimeout) {
-      clearTimeout(this.gestureTimeout)
-      this.gestureTimeout = null
-    }
-
-    if (this.gestureAnimations[gestureType]) {
-      return this.playGestureAnimation(gestureType)
-    }
-
-    const leftArm = this.vrm.humanoid?.getNormalizedBoneNode('leftUpperArm')
-    const rightArm = this.vrm.humanoid?.getNormalizedBoneNode('rightUpperArm')
-    const leftForearm = this.vrm.humanoid?.getNormalizedBoneNode('leftLowerArm')
-    const rightForearm = this.vrm.humanoid?.getNormalizedBoneNode('rightLowerArm')
-    const leftHand = this.vrm.humanoid?.getNormalizedBoneNode('leftHand')
-    const rightHand = this.vrm.humanoid?.getNormalizedBoneNode('rightHand')
-
-    if (!leftArm || !rightArm) return
-
-    const startPos = {
-      leftArm: leftArm.rotation.clone(),
-      rightArm: rightArm.rotation.clone(),
-      leftForearm: leftForearm?.rotation.clone(),
-      rightForearm: rightForearm?.rotation.clone(),
-      leftHand: leftHand?.rotation.clone(),
-      rightHand: rightHand?.rotation.clone()
-    }
-
-    let gestureFunc
-
-    switch (gestureType) {
-      case 'wave':
-      case 'handWave':
-        gestureFunc = (t) => {
-          const wave = Math.sin(t * Math.PI * 5) * 0.5
-          const lift = Math.sin(t * Math.PI) * 1.2
-          rightArm.rotation.x = startPos.rightArm.x - lift * 0.9
-          rightArm.rotation.z = startPos.rightArm.z - 0.8 + wave
-          if (rightForearm) rightForearm.rotation.y = wave * 0.7
-          if (rightHand) rightHand.rotation.z = wave * 0.4
-        }
-        break
-
-      case 'point':
-      case 'pointing':
-        gestureFunc = (t) => {
-          const intensity = Math.sin(t * Math.PI) * 1.0
-          rightArm.rotation.x = startPos.rightArm.x - intensity * 1.2
-          rightArm.rotation.z = startPos.rightArm.z - intensity * 0.6
-          if (rightForearm) rightForearm.rotation.x = intensity * 0.9
-          if (rightHand) rightHand.rotation.x = intensity * 0.5
-        }
-        break
-
-      case 'think':
-        gestureFunc = (t) => {
-          const intensity = Math.sin(t * Math.PI) * 0.8
-          rightArm.rotation.x = startPos.rightArm.x - intensity * 1.0
-          rightArm.rotation.y = startPos.rightArm.y + intensity * 0.4
-          if (rightForearm) rightForearm.rotation.x = intensity * 1.3
-          if (rightHand) {
-            rightHand.rotation.x = intensity * 0.6
-            rightHand.rotation.z = intensity * 0.3
-          }
-        }
-        break
-
-      case 'clap':
-      case 'clapping':
-        gestureFunc = (t) => {
-          const clap = Math.sin(t * Math.PI * 8) * 0.7
-          const lift = Math.sin(t * Math.PI) * 0.6
-          leftArm.rotation.z = startPos.leftArm.z - clap - lift
-          rightArm.rotation.z = startPos.rightArm.z + clap + lift
-          leftArm.rotation.x = startPos.leftArm.x - lift * 0.4
-          rightArm.rotation.x = startPos.rightArm.x - lift * 0.4
-        }
-        break
-
-      case 'shrug':
-        gestureFunc = (t) => {
-          const intensity = Math.sin(t * Math.PI) * 0.8
-          leftArm.rotation.z = startPos.leftArm.z + intensity
-          rightArm.rotation.z = startPos.rightArm.z - intensity
-          leftArm.rotation.x = startPos.leftArm.x - intensity * 0.4
-          rightArm.rotation.x = startPos.rightArm.x - intensity * 0.4
-          if (leftForearm) leftForearm.rotation.y = -intensity * 0.5
-          if (rightForearm) rightForearm.rotation.y = intensity * 0.5
-        }
-        break
-
-      case 'thumbsUp':
-        gestureFunc = (t) => {
-          const intensity = Math.sin(t * Math.PI) * 0.9
-          rightArm.rotation.x = startPos.rightArm.x - intensity * 0.8
-          rightArm.rotation.z = startPos.rightArm.z - intensity * 0.5
-          if (rightForearm) rightForearm.rotation.y = intensity * 0.4
-          if (rightHand) {
-            rightHand.rotation.z = -intensity * 0.6
-            rightHand.rotation.x = intensity * 0.4
-          }
-        }
-        break
-
-      case 'handToHeart':
-        gestureFunc = (t) => {
-          const intensity = Math.sin(t * Math.PI) * 0.9
-          rightArm.rotation.x = startPos.rightArm.x - intensity * 0.7
-          rightArm.rotation.y = startPos.rightArm.y + intensity * 0.6
-          if (rightForearm) rightForearm.rotation.x = intensity * 0.9
-          if (rightHand) rightHand.rotation.x = intensity * 0.5
-        }
-        break
-
-      case 'talk':
-      case 'talking':
-        gestureFunc = (t) => {
-          const move = Math.sin(t * Math.PI * 3) * 0.35
-          const sway = Math.cos(t * Math.PI * 2) * 0.25
-          leftArm.rotation.x = startPos.leftArm.x + move * 0.5
-          rightArm.rotation.x = startPos.rightArm.x - move * 0.5
-          if (leftHand) leftHand.rotation.z = sway
-          if (rightHand) rightHand.rotation.z = -sway
-        }
-        break
-
-      case 'idle':
-        gestureFunc = () => {}
-        break
-
-      default:
-        return
-    }
-
-    return new Promise((resolve) => {
-      const startTime = performance.now()
-
-      const animate = (now) => {
-        const elapsed = now - startTime
-        const t = Math.min(elapsed / duration, 1)
-        const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
-
-        gestureFunc(eased)
-
-        if (t < 1) {
-          requestAnimationFrame(animate)
-        } else {
-          const returnDuration = 500
-          const returnStart = performance.now()
-
-          const returnAnimate = (now) => {
-            const elapsed = now - returnStart
-            const rt = Math.min(elapsed / returnDuration, 1)
-            const eased = rt < 0.5 ? 2 * rt * rt : 1 - Math.pow(-2 * rt + 2, 2) / 2
-
-            leftArm.rotation.x += (startPos.leftArm.x - leftArm.rotation.x) * eased
-            leftArm.rotation.y += (startPos.leftArm.y - leftArm.rotation.y) * eased
-            leftArm.rotation.z += (startPos.leftArm.z - leftArm.rotation.z) * eased
-
-            rightArm.rotation.x += (startPos.rightArm.x - rightArm.rotation.x) * eased
-            rightArm.rotation.y += (startPos.rightArm.y - rightArm.rotation.y) * eased
-            rightArm.rotation.z += (startPos.rightArm.z - rightArm.rotation.z) * eased
-
-            if (leftForearm && startPos.leftForearm) {
-              leftForearm.rotation.x += (startPos.leftForearm.x - leftForearm.rotation.x) * eased
-              leftForearm.rotation.y += (startPos.leftForearm.y - leftForearm.rotation.y) * eased
-            }
-
-            if (rightForearm && startPos.rightForearm) {
-              rightForearm.rotation.x += (startPos.rightForearm.x - rightForearm.rotation.x) * eased
-              rightForearm.rotation.y += (startPos.rightForearm.y - rightForearm.rotation.y) * eased
-            }
-
-            if (leftHand && startPos.leftHand) {
-              leftHand.rotation.x += (startPos.leftHand.x - leftHand.rotation.x) * eased
-              leftHand.rotation.z += (startPos.leftHand.z - leftHand.rotation.z) * eased
-            }
-
-            if (rightHand && startPos.rightHand) {
-              rightHand.rotation.x += (startPos.rightHand.x - rightHand.rotation.x) * eased
-              rightHand.rotation.z += (startPos.rightHand.z - rightHand.rotation.z) * eased
-            }
-
-            if (rt < 1) {
-              requestAnimationFrame(returnAnimate)
-            } else {
-              resolve()
-            }
-          }
-          requestAnimationFrame(returnAnimate)
-        }
-      }
-      requestAnimationFrame(animate)
-    })
-  }
-
-  async playGestureAnimation(gestureType) {
-    if (!this.currentMixer || !this.gestureAnimations[gestureType]) return
-
-    return new Promise((resolve) => {
-      const gestureAction = this.currentMixer.clipAction(this.gestureAnimations[gestureType])
-      gestureAction.setLoop(THREE.LoopOnce)
-      gestureAction.clampWhenFinished = true
-      gestureAction.reset()
-      gestureAction.setEffectiveWeight(0.85)
-      gestureAction.play()
-
-      const duration = this.gestureAnimations[gestureType].duration * 1000
-
-      this.gestureTimeout = setTimeout(() => {
-        gestureAction.fadeOut(0.4)
-        setTimeout(resolve, 400)
-      }, duration)
-    })
-  }
-
   // ==================== ANIMATION SEQUENCE PLAYER ====================
 
   async playAnimationSequence(plan) {
@@ -914,14 +528,16 @@ startIdleAnimation() {
     try {
       for (let i = 0; i < plan.length; i++) {
         const step = plan[i]
-        const intensity = Math.min((step.intensity || 0.7) * 0.75, 0.95)
+        const intensity = Math.min((step.intensity || 0.7) * 1.5, 1.0)
 
         const animations = []
 
+        // Set expression with detected names
         if (step.expression && step.expression !== 'neutral') {
           animations.push(this.setExpression(step.expression, intensity, 400))
         }
 
+        // Head motion
         if (step.headMotion && step.headMotion !== 'none') {
           animations.push(
             this.animateHeadMotion(
@@ -931,18 +547,10 @@ startIdleAnimation() {
           )
         }
 
-        if (step.gesture && step.gesture !== 'none' && step.gesture !== 'talk') {
-          animations.push(
-            this.performGesture(
-              step.gesture,
-              Math.min(step.duration * 1.0, 1500)
-            )
-          )
-        }
-
         await Promise.all(animations)
         await new Promise(r => setTimeout(r, Math.max(step.duration * 0.5, 300)))
 
+        // Reset expression
         if (step.expression && step.expression !== 'neutral') {
           await this.resetExpression(step.expression, 300)
         }
@@ -987,29 +595,14 @@ startIdleAnimation() {
       this.subtleMovementInterval = null
     }
 
-    if (this.handGestureInterval) {
-      clearInterval(this.handGestureInterval)
-      this.handGestureInterval = null
-    }
-
-    if (this.speakingHandInterval) {
-      clearInterval(this.speakingHandInterval)
-      this.speakingHandInterval = null
-    }
-
-    if (this.speakingHeadInterval) {
-      clearInterval(this.speakingHeadInterval)
-      this.speakingHeadInterval = null
-    }
-
     if (this.eyeMovementInterval) {
       clearInterval(this.eyeMovementInterval)
       this.eyeMovementInterval = null
     }
 
-    if (this.gestureTimeout) {
-      clearTimeout(this.gestureTimeout)
-      this.gestureTimeout = null
+    if (this.speakingMotionInterval) {
+      clearInterval(this.speakingMotionInterval)
+      this.speakingMotionInterval = null
     }
 
     if (this.currentTransition) {
@@ -1023,10 +616,9 @@ startIdleAnimation() {
     }
 
     this.idleAction = null
-    this.currentAnimationAction = null
-    this.activeAnimations.clear()
     this.isPlayingSequence = false
     this.isSpeaking = false
+    this.detectedExpressions = {}
 
     console.log('✅ AnimationManager cleanup complete')
   }

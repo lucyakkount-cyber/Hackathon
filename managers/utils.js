@@ -1,6 +1,6 @@
-// managers/utils.js - ENHANCED with Perfect Synchronization
+// managers/utils.js - COMPLETE FINAL FIXED Audio Sync & Mouth Movement
+
 export class Utils {
-  // Animation easing functions
   static easeOut(t) {
     return t * (2 - t)
   }
@@ -45,12 +45,10 @@ export class Utils {
   static analyzeFrequencyData(frequencyData, startRatio = 0, endRatio = 1) {
     const startIndex = Math.floor(frequencyData.length * startRatio)
     const endIndex = Math.floor(frequencyData.length * endRatio)
-
     let sum = 0
     for (let i = startIndex; i < endIndex; i++) {
       sum += frequencyData[i]
     }
-
     return sum / (endIndex - startIndex) / 255
   }
 
@@ -115,7 +113,6 @@ export class Utils {
 }
 
 // ==================== PERFECT AUDIO-ANIMATION SYNC ====================
-
 export async function processMessageOptimized(
   message,
   aiClient,
@@ -130,43 +127,35 @@ export async function processMessageOptimized(
     console.log('🎯 Processing message:', message)
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
-    // ==================== STEP 1: Get AI Response ====================
+    // STEP 1: Get AI Response
     console.log('🤖 Step 1: Getting AI response...')
     const aiResponse = await aiClient.chatWithAI(message, config.getSystemPrompt())
     console.log('✅ AI response received:', aiResponse.substring(0, 60) + '...')
-    console.log('   Length:', aiResponse.length, 'characters')
 
-    // ==================== STEP 2: Parallel TTS + Animation Plan ====================
+    // STEP 2: Parallel TTS + Animation Plan
     console.log('\n🔄 Step 2: Generating TTS and Animation Plan (PARALLEL)...')
-
     const parallelStart = performance.now()
-
     const [audioBlob, animationPlan] = await Promise.all([
-      // TTS Generation
       audioManager.generateTTS(aiResponse, config.config).catch(err => {
         console.error('❌ TTS failed:', err.message)
         return null
       }),
-
-      // Animation Plan Generation
       aiClient.generateAnimationPlan(aiResponse).catch(err => {
         console.error('❌ Animation plan failed:', err.message)
         return []
       })
     ])
-
     const parallelDuration = ((performance.now() - parallelStart) / 1000).toFixed(2)
     console.log(`✅ Parallel processing complete in ${parallelDuration}s`)
-    console.log('   Audio:', audioBlob ? `${(audioBlob.size / 1024).toFixed(1)}KB` : 'Failed')
-    console.log('   Animation plan:', animationPlan.length, 'steps')
 
     if (!audioBlob) {
-      console.warn('⚠️ No audio generated, skipping playback')
+      console.warn('⚠️ No audio generated')
       return aiResponse
     }
 
-    // ==================== STEP 3: Get Audio Duration ====================
-    console.log('\n⏱️ Step 3: Analyzing audio duration...')
+    // STEP 3: Get audio duration and prepare playback
+    console.log('\n⏱️ Step 3: Preparing audio for playback...')
+    await audioManager.resumeContext()
 
     const audioDuration = await new Promise((resolve) => {
       const tempAudio = new Audio()
@@ -178,108 +167,75 @@ export async function processMessageOptimized(
       tempAudio.onerror = () => resolve(0)
       setTimeout(() => resolve(0), 3000)
     })
-
     console.log(`✅ Audio duration: ${audioDuration.toFixed(2)}s`)
 
-    // ==================== STEP 4: Sync Animation Timings ====================
+    // STEP 4: Synchronize animation with audio
     if (animationPlan.length > 0 && audioDuration > 0) {
-      console.log('\n🎬 Step 4: Synchronizing animation timings...')
-
+      console.log('\n🎬 Step 4: Synchronizing animations to audio...')
       const totalPlanDuration = animationPlan.reduce((sum, step) => sum + step.duration, 0)
       const audioMs = audioDuration * 1000
 
-      console.log('   Original plan duration:', (totalPlanDuration / 1000).toFixed(2), 's')
-      console.log('   Audio duration:', audioDuration.toFixed(2), 's')
-
       if (totalPlanDuration > 0) {
         const scale = audioMs / totalPlanDuration
-        console.log('   Scaling factor:', scale.toFixed(3))
-
-        animationPlan.forEach((step, index) => {
-          const originalDuration = step.duration
+        animationPlan.forEach((step) => {
           step.duration = Math.round(step.duration * scale)
-
-          if (index < 3) { // Log first 3 steps
-            console.log(`   Step ${index + 1}: ${originalDuration}ms → ${step.duration}ms`)
-          }
         })
-
-        const newTotal = animationPlan.reduce((sum, step) => sum + step.duration, 0)
-        console.log('   New plan duration:', (newTotal / 1000).toFixed(2), 's')
-        console.log('   ✅ Timings perfectly synchronized!')
+        console.log('✅ Animations synchronized!')
       }
-    } else {
-      console.log('\n⚠️ Step 4: Skipping sync (no animation plan or audio)')
     }
 
-    // ==================== STEP 5: Setup Speech Callbacks ====================
-    console.log('\n🎤 Step 5: Setting up speech callbacks...')
+    // STEP 5: Setup callbacks and prepare mouth sync
+    console.log('\n🎤 Step 5: Setting up speech and mouth sync...')
 
     audioManager.setSpeechCallbacks(
-      // On speech start
       () => {
-        console.log('▶️ SPEECH STARTED')
+        console.log('▶️ Speech started - animations active')
         if (animationManager) {
           animationManager.startSpeakingAnimation()
         }
       },
-      // On speech end
       () => {
-        console.log('⏹️ SPEECH ENDED')
+        console.log('⏹️ Speech ended')
         if (animationManager) {
           animationManager.stopSpeakingAnimation()
         }
       }
     )
 
-    // ==================== STEP 6: Play Audio + Animations ====================
-    console.log('\n🎭 Step 6: Playing audio and animations...')
+    // STEP 6: Play audio with synchronized mouth movement
+    console.log('\n🎭 Step 6: Starting synchronized playback...')
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
-    const playbackStart = performance.now()
+    // 🔥 CRITICAL FIX: Detect mouth expressions BEFORE playback
+    audioManager.detectMouthExpressions(vrm)
+    console.log('✅ Mouth expressions detected:', audioManager.availableMouthExpressions.length)
 
-    // Setup mouth sync BEFORE playing
-    audioManager.setupMouthSync(audioElement, vrm)
-
-    // Start BOTH at the same time
-    const audioPromise = audioManager.playAudioBlob(audioBlob, audioElement)
-
+    // 🔥 CRITICAL FIX: Pass VRM to playAudioBlob (setup happens inside!)
+    const audioPromise = audioManager.playAudioBlob(audioBlob, audioElement, vrm)
     const animationPromise = animationManager && animationPlan.length > 0
       ? animationManager.playAnimationSequence(animationPlan)
       : Promise.resolve()
 
-    // Wait for BOTH to complete
+    // Wait for both to complete
     await Promise.all([audioPromise, animationPromise])
 
-    const playbackDuration = ((performance.now() - playbackStart) / 1000).toFixed(2)
-
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-    console.log('✅ PLAYBACK COMPLETE')
-    console.log(`   Total duration: ${playbackDuration}s`)
-    console.log(`   Audio played: ${audioDuration.toFixed(2)}s`)
-    console.log(`   Animations: ${animationPlan.length} steps`)
+    console.log('✅ Playback complete')
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
 
     return aiResponse
 
   } catch (error) {
-    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-    console.error('❌ MESSAGE PROCESSING ERROR')
-    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-    console.error(error)
-
-    // Ensure animations stop on error
+    console.error('❌ Error processing message:', error)
     if (animationManager) {
       animationManager.stopSpeakingAnimation()
       animationManager.isPlayingSequence = false
     }
-
     throw error
   }
 }
 
-// ==================== ADVANCED ANIMATION SYNCHRONIZATION ====================
-
+// ==================== ADVANCED SYNCHRONIZATION ====================
 export function optimizeAnimationTiming(animationPlan, audioDuration, options = {}) {
   const {
     minStepDuration = 200,
@@ -296,80 +252,41 @@ export function optimizeAnimationTiming(animationPlan, audioDuration, options = 
   const totalOriginalDuration = animationPlan.reduce((sum, step) => sum + step.duration, 0)
 
   if (totalOriginalDuration === 0) {
-    // No durations set, distribute evenly
     const evenDuration = Math.max(
       minStepDuration,
       Math.min(maxStepDuration, audioMs / animationPlan.length)
     )
-
     animationPlan.forEach(step => {
       step.duration = evenDuration
     })
-
     return animationPlan
   }
 
   if (distributeEvenly) {
-    // Scale each step proportionally
     const scale = audioMs / totalOriginalDuration
-
     animationPlan.forEach(step => {
       step.duration = Math.max(
         minStepDuration,
         Math.min(maxStepDuration, Math.round(step.duration * scale))
       )
     })
-  } else {
-    // Keep relative timing but fit within audio duration
-    const newDurations = animationPlan.map(step => {
-      const proportion = step.duration / totalOriginalDuration
-      return Math.max(
-        minStepDuration,
-        Math.min(maxStepDuration, Math.round(audioMs * proportion))
-      )
-    })
-
-    animationPlan.forEach((step, index) => {
-      step.duration = newDurations[index]
-    })
   }
 
   return animationPlan
 }
 
-// ==================== ANIMATION QUALITY ENHANCER ====================
-
 export function enhanceAnimationPlan(plan, options = {}) {
-  const {
-    addTransitions = true,
-    intensityBoost = 1.0,
-    addVariation = true
-  } = options
+  const { addTransitions = true, intensityBoost = 1.0 } = options
 
   if (!plan || plan.length === 0) return plan
 
   const enhanced = plan.map((step, index) => {
     const enhancedStep = { ...step }
 
-    // Boost intensity for more visible animations
     if (enhancedStep.intensity) {
       enhancedStep.intensity = Math.min(enhancedStep.intensity * intensityBoost, 1.0)
     }
 
-    // Add variation to prevent repetition
-    if (addVariation && index > 0) {
-      const prevStep = plan[index - 1]
-
-      // If same expression/gesture, slightly vary intensity
-      if (prevStep.expression === enhancedStep.expression && enhancedStep.intensity) {
-        enhancedStep.intensity = Math.min(
-          enhancedStep.intensity + (Math.random() * 0.15 - 0.075),
-          1.0
-        )
-      }
-    }
-
-    // Ensure minimum duration for visibility
     if (enhancedStep.duration < 300) {
       enhancedStep.duration = 300
     }
@@ -377,41 +294,10 @@ export function enhanceAnimationPlan(plan, options = {}) {
     return enhancedStep
   })
 
-  // Add smooth transitions between major expression changes
-  if (addTransitions && enhanced.length > 1) {
-    const withTransitions = []
-
-    for (let i = 0; i < enhanced.length; i++) {
-      withTransitions.push(enhanced[i])
-
-      // Add transition step between different expressions
-      if (i < enhanced.length - 1) {
-        const current = enhanced[i]
-        const next = enhanced[i + 1]
-
-        if (current.expression !== next.expression &&
-            current.expression !== 'neutral' &&
-            next.expression !== 'neutral') {
-          withTransitions.push({
-            text: '',
-            expression: 'neutral',
-            headMotion: 'none',
-            gesture: 'none',
-            duration: 150,
-            intensity: 0.3
-          })
-        }
-      }
-    }
-
-    return withTransitions
-  }
-
   return enhanced
 }
 
 // ==================== PERFORMANCE MONITORING ====================
-
 export class PerformanceMonitor {
   constructor() {
     this.metrics = {
@@ -427,8 +313,6 @@ export class PerformanceMonitor {
   recordMetric(metricName, value) {
     if (this.metrics[metricName]) {
       this.metrics[metricName].push(value)
-
-      // Keep only last 20 measurements
       if (this.metrics[metricName].length > 20) {
         this.metrics[metricName].shift()
       }
@@ -438,7 +322,6 @@ export class PerformanceMonitor {
   getAverage(metricName) {
     const values = this.metrics[metricName]
     if (!values || values.length === 0) return 0
-
     const sum = values.reduce((a, b) => a + b, 0)
     return sum / values.length
   }
@@ -448,7 +331,6 @@ export class PerformanceMonitor {
     if (!values || values.length === 0) {
       return { min: 0, max: 0, avg: 0, count: 0 }
     }
-
     return {
       min: Math.min(...values),
       max: Math.max(...values),
@@ -460,18 +342,12 @@ export class PerformanceMonitor {
   printReport() {
     console.log('\n📊 PERFORMANCE REPORT')
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-
     Object.keys(this.metrics).forEach(metric => {
       const stats = this.getStats(metric)
       if (stats.count > 0) {
-        console.log(`${metric}:`)
-        console.log(`  Avg: ${stats.avg.toFixed(2)}ms`)
-        console.log(`  Min: ${stats.min.toFixed(2)}ms`)
-        console.log(`  Max: ${stats.max.toFixed(2)}ms`)
-        console.log(`  Count: ${stats.count}`)
+        console.log(`${metric}: Avg ${stats.avg.toFixed(2)}ms (${stats.count} samples)`)
       }
     })
-
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
   }
 
@@ -482,8 +358,7 @@ export class PerformanceMonitor {
   }
 }
 
-// ==================== TEXT PROCESSING HELPERS ====================
-
+// ==================== TEXT PROCESSING ====================
 export function splitTextIntoSegments(text, maxLength = 100) {
   if (!text || text.length <= maxLength) {
     return [text]
@@ -497,71 +372,26 @@ export function splitTextIntoSegments(text, maxLength = 100) {
     if ((currentSegment + sentence).length <= maxLength) {
       currentSegment += sentence
     } else {
-      if (currentSegment) {
-        segments.push(currentSegment.trim())
-      }
+      if (currentSegment) segments.push(currentSegment.trim())
       currentSegment = sentence
     }
   })
 
-  if (currentSegment) {
-    segments.push(currentSegment.trim())
-  }
-
+  if (currentSegment) segments.push(currentSegment.trim())
   return segments
 }
 
 export function estimateSpeechDuration(text, wordsPerMinute = 150) {
   const words = text.split(/\s+/).length
-  return (words / wordsPerMinute) * 60 // seconds
+  return (words / wordsPerMinute) * 60
 }
 
 // ==================== DEBUG HELPERS ====================
-
 export function logAnimationPlan(plan, title = 'Animation Plan') {
   console.log(`\n📋 ${title}`)
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-
   plan.forEach((step, index) => {
-    console.log(`Step ${index + 1}:`)
-    console.log(`  Text: "${step.text?.substring(0, 40)}..."`)
-    console.log(`  Expression: ${step.expression}`)
-    console.log(`  Head: ${step.headMotion}`)
-    console.log(`  Gesture: ${step.gesture}`)
-    console.log(`  Duration: ${step.duration}ms`)
-    console.log(`  Intensity: ${step.intensity}`)
-    console.log('')
+    console.log(`Step ${index + 1}: "${step.text?.substring(0, 40)}..." | ${step.expression} | ${step.duration}ms`)
   })
-
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
-}
-
-export function createDebugOverlay() {
-  const overlay = document.createElement('div')
-  overlay.id = 'vrm-debug-overlay'
-  overlay.style.cssText = `
-    position: fixed;
-    top: 10px;
-    right: 10px;
-    background: rgba(0, 0, 0, 0.8);
-    color: #0f0;
-    font-family: monospace;
-    font-size: 12px;
-    padding: 10px;
-    border-radius: 5px;
-    z-index: 10000;
-    max-width: 300px;
-    backdrop-filter: blur(10px);
-  `
-
-  document.body.appendChild(overlay)
-
-  return {
-    update: (data) => {
-      overlay.innerHTML = Object.entries(data)
-        .map(([key, value]) => `${key}: <span style="color: #fff">${value}</span>`)
-        .join('<br>')
-    },
-    remove: () => overlay.remove()
-  }
 }

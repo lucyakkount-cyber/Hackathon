@@ -22,7 +22,7 @@ export const DEFAULT_CONFIG = {
     position: { x: 0, y: -2, z: -0.5 },
   },
   audio: {
-    ttsUrl: '   https://furnishings-durable-sessions-tenant.trycloudflare.com/tts',
+    ttsUrl: '  https://mall-bless-not-disturbed.trycloudflare.com/',
     speechLang: 'en-US',
   },
   ai: {
