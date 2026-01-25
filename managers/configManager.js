@@ -36,7 +36,7 @@ export class ConfigManager {
 
   getDefaultConfig() {
     return {
-      OPENAI_API_KEY: 'AIzaSyCoOoH68_9R9bYNF6Zmsh43e0kq__zY8hM',
+      OPENAI_API_KEY: import.meta.env.VITE_GEMINI_API_KEY || '',
       presets: {
         default: {
           system_prompt: `You are a helpful AI assistant. You are friendly, enthusiastic, and enjoy helping users with their questions and tasks. Keep your responses conversational and engaging.`,
@@ -123,11 +123,11 @@ export class ConfigManager {
   }
 
   getApiKey() {
-    return this.get('OPENAI_API_KEY', 'AIzaSyCoOoH68_9R9bYNF6Zmsh43e0kq__zY8hM')
+    return this.get('OPENAI_API_KEY', import.meta.env.VITE_GEMINI_API_KEY || '')
   }
 
-  getModel(){
-    return this.get('model', "gemini-2.5-preview")
+  getModel() {
+    return this.get('model', 'gemini-2.5-preview')
   }
 
   getSovitsConfig() {
@@ -152,7 +152,13 @@ export class ConfigManager {
     return this.get('animation_config', {
       default_animations_path: 'dist/animations/',
       idle_animation: 'HappyIdle.vrma',
-      gesture_animations: ['Wave.vrma', 'Shrug.vrma', 'Pointing.vrma', 'Clapping.vrma', 'ThumbsUp.vrma'],
+      gesture_animations: [
+        'Wave.vrma',
+        'Shrug.vrma',
+        'Pointing.vrma',
+        'Clapping.vrma',
+        'ThumbsUp.vrma',
+      ],
     })
   }
 
