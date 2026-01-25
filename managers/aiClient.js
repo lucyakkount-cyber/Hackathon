@@ -1,117 +1,327 @@
-// aiClient.js - Handles AI chat and animation planning
+// managers/aiClient.js
 import { GoogleGenAI } from '@google/genai'
 
-export class AIClient {
-  constructor(apiKey) {
-    this.client = new GoogleGenAI({
-      apiKey: apiKey || 'AIzaSyCYkivW_PQEE3ayBSYTXw1mtnQiDMau7GM'
-    })
-    this.model = 'gemini-2.5-flash'
-  }
-
-  async chatWithAI(message, systemPrompt = '') {
-    try {
-      const prompt = systemPrompt
-        ? `${systemPrompt}\n\nUser: ${message}`
-        : message
-
-      const response = await this.client.models.generateContent({
-        model: this.model,
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }],
-          },
-        ],
-      })
-
-      return response.candidates?.[0]?.content?.parts?.[0]?.text || '...no reply...'
-    } catch (error) {
-      console.error('Google Generative AI error:', error)
-      return 'Sorry, something went wrong with the AI response.'
+const WORKLET_CODE = `
+class PCMProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const input = inputs[0];
+    if (input && input[0] && input[0].length > 0) {
+      this.port.postMessage(new Float32Array(input[0]));
     }
+    return true;
   }
-
-  async generateAnimationPlan(text) {
-    const animPrompt = `
-You are an advanced animation director for a VRM character with extensive animation capabilities.
-Analyze the following text and create a detailed animation sequence.
-
-⚠️ Return ONLY valid JSON (array of objects). Do not include explanations or code fences.
-
-Available expressions: neutral, happy, sad, angry, surprised, excited, confused, smirk, laugh, embarrassed, determined, worried, curious, sleepy, mischievous
-
-Available head motions: none, nod, shake, tiltLeft, tiltRight, lookUp, lookDown, doubleNod, confused
-
-Available gestures: none, point, handWave, shrug, leanIn, crossArms, handToHeart, thumbsUp, facepalm, handToHip, stretch, clap, think, dance, talk, idle
-
-SPECIAL GESTURES:
-- dance: Triggers the Bling-Bang-Bang-Born dance animation (10+ seconds)
-- talk: Uses talking animation during speech
-- idle: Returns to happy idle animation
-
-Each object MUST have:
-- "text": the spoken phrase/sentence,
-- "expression": choose the most appropriate expression,
-- "headMotion": choose appropriate head movement,
-- "gesture": choose appropriate gesture (use dance for celebratory moments, talk for conversations),
-- "duration": milliseconds for this animation step,
-- "intensity": 0.1-1.0 for animation strength
-
-Consider:
-- Use "dance" gesture for celebratory, fun, or energetic responses
-- Use "talk" gesture during normal conversation
-- Match expressions to emotional content
-- Use gestures for emphasis, not every phrase
-- Vary head motions naturally
-- Time animations to speech rhythm
-- Use lower intensity for subtle moments
-
-Text to animate:
-"""${text}"""
+}
+registerProcessor('pcm-processor', PCMProcessor);
 `
 
-    try {
-      const response = await this.client.models.generateContent({
-        model: this.model,
-        contents: [
+export class AIClient {
+  constructor(apiKey, model) {
+    this.client = new GoogleGenAI({ apiKey: apiKey })
+    this.liveModel = model
+    this.activeSession = null
+    this.audioContext = null
+    this.workletNode = null
+    this.mediaStream = null
+    this.isRecording = false
+    this.inputBuffer = new Int16Array(4096)
+    this.inputBufferIndex = 0
+  }
+
+  async connectLive(
+    systemPrompt = '',
+    onAudioData,
+    onAnimationTrigger,
+    onExpressionTrigger,
+    onVisionTrigger,
+    onScreenTrigger,
+    onDisconnect,
+    availableAnimations = [],
+  ) {
+    if (this.activeSession) return
+
+    console.log('🔌 Connecting to Gemini Live...')
+
+    // Store the disconnect callback
+    this.onDisconnectCallback = onDisconnect
+
+    const animString =
+      availableAnimations.length > 0
+        ? availableAnimations.join(', ')
+        : 'wave, clap, dance, backflip'
+
+    const tools = [
+      {
+        functionDeclarations: [
           {
-            role: 'user',
-            parts: [{ text: animPrompt }],
+            name: 'trigger_animation',
+            description: 'Triggers a body movement.',
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                animation_name: { type: 'STRING', description: `Available: ${animString}` },
+              },
+              required: ['animation_name'],
+            },
+          },
+          // ⚡ UPDATED: Full List of Emotions
+          {
+            name: 'set_expression',
+            description: 'Sets the facial expression.',
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                expression: {
+                  type: 'STRING',
+                  description:
+                    'Values: happy, sad, angry, surprised, confused, embarrassed, excited, tired, serious, smug, thinking, crying, deadpan, shock, fear, disgust',
+                },
+                duration: { type: 'NUMBER', description: 'Duration in seconds.' },
+              },
+              required: ['expression'],
+            },
+          },
+          // 📷 NEW: Vision Capability
+          {
+            name: 'look_at_user',
+            description: 'See the user and their surroundings via camera.',
+            parameters: {
+              type: 'OBJECT',
+              properties: {},
+            },
+          },
+          // 📱 NEW: Screen Capture Capability
+          {
+            name: 'look_at_screen',
+            description: 'See the user and their surroundings via screen.',
+            parameters: {
+              type: 'OBJECT',
+              properties: {},
+            },
           },
         ],
+      },
+    ]
+
+    const config = {
+      responseModalities: ['AUDIO'],
+      tools: tools,
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+    }
+
+    try {
+      this.activeSession = await this.client.live.connect({
+        model: this.liveModel,
+        config,
+        callbacks: {
+          onopen: () => {
+            console.log('✅ Live Session Started')
+            this.startMicrophone()
+          },
+          onmessage: (msg) => {
+            if (msg.serverContent?.modelTurn?.parts) {
+              for (const part of msg.serverContent.modelTurn.parts) {
+                if (part.inlineData?.data) {
+                  const binaryString = atob(part.inlineData.data)
+                  const bytes = new Uint8Array(binaryString.length)
+                  for (let i = 0; i < binaryString.length; i++)
+                    bytes[i] = binaryString.charCodeAt(i)
+                  onAudioData?.(new Int16Array(bytes.buffer))
+                }
+                if (part.functionCall)
+                  this._executeFunction(
+                    part.functionCall,
+                    onAnimationTrigger,
+                    onExpressionTrigger,
+                    onVisionTrigger,
+                    onScreenTrigger,
+                  )
+              }
+            }
+            if (msg.toolCall)
+              this._handleToolCall(
+                msg.toolCall,
+                onAnimationTrigger,
+                onExpressionTrigger,
+                onVisionTrigger,
+                onScreenTrigger,
+              )
+          },
+          onclose: (e) => {
+            console.log('❌ Connection Closed', e)
+            const reason = e.reason || 'Connection closed unexpectedly'
+            this.disconnect(reason)
+          },
+          onerror: (e) => console.error('🔥 Live Error:', e),
+        },
       })
-
-      let rawResponse = response.candidates?.[0]?.content?.parts?.[0]?.text || '[]'
-
-      // Clean up the response
-      rawResponse = rawResponse
-        .replace(/```json/g, '')
-        .replace(/```/g, '')
-        .trim()
-
-      const animationPlan = JSON.parse(rawResponse)
-      console.log('Generated animation plan:', animationPlan)
-
-      return Array.isArray(animationPlan) ? animationPlan : [animationPlan]
-    } catch (error) {
-      console.error('Animation plan generation error:', error)
-
-      // Fallback simple plan
-      return [{
-        text: text,
-        expression: 'neutral',
-        headMotion: 'none',
-        gesture: 'none',
-        duration: 2000,
-        intensity: 0.5
-      }]
+    } catch (e) {
+      console.error('🔥 Connection Failed:', e)
+      this.disconnect()
     }
   }
 
-  updateApiKey(newApiKey) {
-    this.client = new GoogleGenAI({
-      apiKey: newApiKey
-    })
+  _handleToolCall(
+    toolCall,
+    onAnimationTrigger,
+    onExpressionTrigger,
+    onVisionTrigger,
+    onScreenTrigger,
+  ) {
+    if (!toolCall.functionCalls) return
+    for (const fc of toolCall.functionCalls)
+      this._executeFunction(
+        fc,
+        onAnimationTrigger,
+        onExpressionTrigger,
+        onVisionTrigger,
+        onScreenTrigger,
+      )
+  }
+
+  _executeFunction(fc, onAnimationTrigger, onExpressionTrigger, onVisionTrigger, onScreenTrigger) {
+    const { id, name, args } = fc
+    console.log(`🎯 Function (Queued): ${name}`, args)
+
+    // Vision is special: It needs IMMEDIATE return of data to be useful,
+    // but we also want the AI to wait.
+    // However, usually "look" happens, then AI speaks.
+    // So queueing might still be okay, BUT usually we want the image sent back ASAP.
+
+    if (name === 'look_at_user') {
+      console.log('📷 Triggering Vision Tool...')
+      // Immediate execution for vision to get data back to AI
+      onVisionTrigger?.().then((base64Image) => {
+        if (base64Image) {
+          console.log('📤 Sending Image to Gemini...')
+          this._sendRealtimeImage(base64Image)
+          this._sendToolResponse(id, name, { result: 'Image captured and sent.' })
+        } else {
+          this._sendToolResponse(id, name, { error: 'Failed to capture image.' })
+        }
+      })
+      return
+    }
+
+    if (name === 'look_at_screen') {
+      console.log('🖥️ Triggering Screen Capture...')
+      onScreenTrigger?.().then((base64Image) => {
+        if (base64Image) {
+          console.log('📤 Sending Screen to Gemini...')
+          this._sendRealtimeImage(base64Image)
+          this._sendToolResponse(id, name, { result: 'Screen captured and sent.' })
+        } else {
+          this._sendToolResponse(id, name, { error: 'Failed to capture screen.' })
+        }
+      })
+      return
+    }
+
+    // Normal Delayed Animations
+    const EXECUTION_DELAY = 2400
+
+    setTimeout(() => {
+      console.log(`▶️ Executing Delayed: ${name}`)
+      if (name === 'trigger_animation' && args.animation_name) {
+        onAnimationTrigger?.(args.animation_name)
+      } else if (name === 'set_expression' && args.expression) {
+        const duration = args.duration || 2.0
+        onExpressionTrigger?.(args.expression, duration)
+      }
+    }, EXECUTION_DELAY)
+
+    // We send "ok" immediately to acknowledge command, but action is delayed visually.
+    this._sendToolResponse(id, name, { status: 'queued', triggered: `${name} (delayed)` })
+  }
+
+  async _sendToolResponse(id, name, response) {
+    if (!this.activeSession) return
+    try {
+      await this.activeSession.sendToolResponse({
+        functionResponses: [{ id: id, name: name, response: { result: response } }],
+      })
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  async _sendRealtimeImage(base64Image) {
+    if (!this.activeSession) return
+    try {
+      await this.activeSession.sendRealtimeInput({
+        media: { mimeType: 'image/jpeg', data: base64Image },
+      })
+    } catch (e) {
+      console.error('Failed to send image:', e)
+    }
+  }
+
+  async startMicrophone() {
+    if (this.isRecording) return
+    try {
+      this.audioContext = new AudioContext({ sampleRate: 16000 })
+      await this.audioContext.resume()
+      const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' })
+      await this.audioContext.audioWorklet.addModule(URL.createObjectURL(blob))
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, sampleRate: 16000 },
+      })
+      const source = this.audioContext.createMediaStreamSource(this.mediaStream)
+      this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor')
+      this.workletNode.port.onmessage = (e) => {
+        if (this.isRecording) this._processAudioChunk(e.data)
+      }
+      source.connect(this.workletNode)
+      this.isRecording = true
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  stopMicrophone() {
+    this.isRecording = false
+    this.mediaStream?.getTracks().forEach((t) => t.stop())
+    this.workletNode?.disconnect()
+    this.audioContext?.close()
+    this.inputBufferIndex = 0
+  }
+
+  _processAudioChunk(float32Data) {
+    for (let i = 0; i < float32Data.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32Data[i]))
+      this.inputBuffer[this.inputBufferIndex++] = s < 0 ? s * 0x8000 : s * 0x7fff
+      if (this.inputBufferIndex === this.inputBuffer.length) this._flushInputBuffer()
+    }
+  }
+
+  _flushInputBuffer() {
+    if (!this.activeSession) return
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(this.inputBuffer.buffer)))
+    this._sendToGemini(base64)
+    this.inputBufferIndex = 0
+  }
+
+  async _sendToGemini(base64Audio) {
+    if (!this.activeSession) return
+    try {
+      await this.activeSession.sendRealtimeInput({
+        media: { mimeType: 'audio/pcm;rate=16000', data: base64Audio },
+      })
+    } catch (e) {
+      if (e.message.includes('closed')) this.disconnect()
+    }
+  }
+
+  disconnect(reason = 'User disconnected') {
+    if (!this.activeSession && !this.isRecording) return // Already cleaned up
+
+    this.activeSession?.close()
+    this.activeSession = null
+    this.stopMicrophone()
+
+    // Notify parent component
+    if (this.onDisconnectCallback) {
+      this.onDisconnectCallback(reason)
+      this.onDisconnectCallback = null
+    }
   }
 }

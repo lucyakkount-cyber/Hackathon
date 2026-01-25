@@ -36,7 +36,7 @@ export class ConfigManager {
 
   getDefaultConfig() {
     return {
-      OPENAI_API_KEY: 'AIzaSyCYkivW_PQEE3ayBSYTXw1mtnQiDMau7GM',
+      OPENAI_API_KEY: 'AIzaSyCoOoH68_9R9bYNF6Zmsh43e0kq__zY8hM',
       presets: {
         default: {
           system_prompt: `You are a helpful AI assistant. You are friendly, enthusiastic, and enjoy helping users with their questions and tasks. Keep your responses conversational and engaging.`,
@@ -55,14 +55,14 @@ export class ConfigManager {
         rotation: { x: 0, y: Math.PI, z: 0 },
       },
       animation_config: {
-        default_animations_path: '/animations/',
-        idle_animation: 'HappyIdle.fbx',
+        default_animations_path: 'dist/animations/',
+        idle_animation: 'HappyIdle.vrma',
         gesture_animations: [
-          'Wave.fbx',
-          'Shrug.fbx',
-          'Pointing.fbx',
-          'Clapping.fbx',
-          'ThumbsUp.fbx',
+          'Wave.vrma',
+          'Shrug.vrma',
+          'Pointing.vrma',
+          'Clapping.vrma',
+          'ThumbsUp.vrma',
         ],
       },
       audio_config: {
@@ -123,7 +123,11 @@ export class ConfigManager {
   }
 
   getApiKey() {
-    return this.get('OPENAI_API_KEY', 'AIzaSyCYkivW_PQEE3ayBSYTXw1mtnQiDMau7GM')
+    return this.get('OPENAI_API_KEY', 'AIzaSyCoOoH68_9R9bYNF6Zmsh43e0kq__zY8hM')
+  }
+
+  getModel(){
+    return this.get('model', "gemini-2.5-preview")
   }
 
   getSovitsConfig() {
@@ -146,15 +150,15 @@ export class ConfigManager {
 
   getAnimationConfig() {
     return this.get('animation_config', {
-      default_animations_path: '/animations/',
-      idle_animation: 'HappyIdle.fbx',
-      gesture_animations: ['Wave.fbx', 'Shrug.fbx', 'Pointing.fbx', 'Clapping.fbx', 'ThumbsUp.fbx'],
+      default_animations_path: 'dist/animations/',
+      idle_animation: 'HappyIdle.vrma',
+      gesture_animations: ['Wave.vrma', 'Shrug.vrma', 'Pointing.vrma', 'Clapping.vrma', 'ThumbsUp.vrma'],
     })
   }
 
   getAudioConfig() {
     return this.get('audio_config', {
-      tts_url: '  https://mall-bless-not-disturbed.trycloudflare.com/',
+      tts_url: '  http://127.0.0.1:9880/',
       speech_recognition_lang: 'en-US',
       audio_context_options: {
         sampleRate: 44100,
@@ -163,7 +167,7 @@ export class ConfigManager {
   }
 
   getTTSUrl() {
-    return this.get('audio_config.tts_url', '  https://mall-bless-not-disturbed.trycloudflare.com/')
+    return this.get('audio_config.tts_url', '  http://127.0.0.1:9880/')
   }
 
   getSpeechRecognitionLang() {

@@ -1,42 +1,17 @@
-// managers/vrmLoader.js - Enhanced with T-Pose Fix and Natural Animations
+// managers/vrmLoader.js - Cleaned for Natural Animations Only
+
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
-import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm'
+// Removed: import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
+import { VRMLoaderPlugin } from '@pixiv/three-vrm'
 
 export class VRMLoader {
   constructor() {
     this.loader = new GLTFLoader()
-    this.fbxLoader = new FBXLoader()
+    // Removed: this.fbxLoader = new FBXLoader()
     this.loader.register((parser) => new VRMLoaderPlugin(parser))
 
-    this.animationCache = new Map()
-    this.loadedClips = []
-
-    this.mixamoVRMRigMap = {
-      mixamorigHips: 'hips',
-      mixamorigSpine: 'spine',
-      mixamorigSpine1: 'chest',
-      mixamorigSpine2: 'upperChest',
-      mixamorigNeck: 'neck',
-      mixamorigHead: 'head',
-      mixamorigLeftShoulder: 'leftShoulder',
-      mixamorigLeftArm: 'leftUpperArm',
-      mixamorigLeftForeArm: 'leftLowerArm',
-      mixamorigLeftHand: 'leftHand',
-      mixamorigRightShoulder: 'rightShoulder',
-      mixamorigRightArm: 'rightUpperArm',
-      mixamorigRightForeArm: 'rightLowerArm',
-      mixamorigRightHand: 'rightHand',
-      mixamorigLeftUpLeg: 'leftUpperLeg',
-      mixamorigLeftLeg: 'leftLowerLeg',
-      mixamorigLeftFoot: 'leftFoot',
-      mixamorigRightUpLeg: 'rightUpperLeg',
-      mixamorigRightLeg: 'rightLowerLeg',
-      mixamorigRightFoot: 'rightFoot',
-      mixamorigLeftToeBase: 'leftToes',
-      mixamorigRightToeBase: 'rightToes',
-    }
+    // Removed all animation cache and rig map properties
   }
 
   async loadVRMFromPath(path) {
@@ -78,9 +53,6 @@ export class VRMLoader {
     vrm.scene.castShadow = true
     vrm.scene.receiveShadow = true
 
-    // Use combineSkeletons instead of deprecated removeUnnecessaryJoints
-    // VRMUtils.combineSkeletons(vrm.scene) // Removed - not needed for basic setup
-
     // CRITICAL: Fix T-Pose immediately
     this.fixTPose(vrm)
 
@@ -103,14 +75,14 @@ export class VRMLoader {
 
       // STRONG rotations to bring arms DOWN from T-pose
       if (leftUpperArm) {
-        leftUpperArm.rotation.z = 1.0  // Bring left arm DOWN (stronger)
-        leftUpperArm.rotation.x = 0.3  // Forward
-        leftUpperArm.rotation.y = 0.2  // Inward
+        leftUpperArm.rotation.z = 1.0  // Bring left arm DOWN (stronger)
+        leftUpperArm.rotation.x = 0.3  // Forward
+        leftUpperArm.rotation.y = 0.2  // Inward
       }
 
       if (rightUpperArm) {
         rightUpperArm.rotation.z = -1.0 // Bring right arm DOWN (stronger)
-        rightUpperArm.rotation.x = 0.3  // Forward
+        rightUpperArm.rotation.x = 0.3  // Forward
         rightUpperArm.rotation.y = -0.2 // Inward
       }
 
@@ -153,130 +125,9 @@ export class VRMLoader {
     }
   }
 
-  async loadAnimationFromFBX(fbxPath) {
-    if (this.animationCache.has(fbxPath)) {
-      console.log('Using cached animation:', fbxPath)
-      return this.animationCache.get(fbxPath)
-    }
-
-    try {
-      console.log('Loading FBX animation:', fbxPath)
-      const fbxAsset = await this.fbxLoader.loadAsync(fbxPath)
-      const clip = THREE.AnimationClip.findByName(fbxAsset.animations, 'mixamo.com') || fbxAsset.animations[0]
-
-      if (!clip) {
-        throw new Error('No animation found in FBX')
-      }
-
-      const result = { clip, asset: fbxAsset }
-      this.animationCache.set(fbxPath, result)
-      console.log('Animation loaded:', fbxPath)
-      return result
-    } catch (error) {
-      console.error('Failed to load animation:', fbxPath, error)
-      throw error
-    }
-  }
-
-  async loadDefaultAnimations(vrm) {
-    const animations = {}
-
-    try {
-      console.log('Loading animations...')
-
-      const gestures = [
-        { file: 'Wave.fbx', name: 'wave' },
-        { file: 'Shrug.fbx', name: 'shrug' },
-        { file: 'Pointing.fbx', name: 'pointing' },
-        { file: 'Clapping.fbx', name: 'clapping' },
-        { file: 'ThumbsUp.fbx', name: 'thumbsup' }
-      ]
-
-      for (const gesture of gestures) {
-        try {
-          const data = await this.loadAnimationFromFBX(`/animations/${gesture.file}`)
-          animations[gesture.name] = await this.convertMixamoClip(data.clip, data.asset, vrm)
-          this.loadedClips.push(animations[gesture.name])
-          console.log(`${gesture.name} loaded`)
-        } catch (error) {
-          console.warn(`${gesture.file} not available`)
-        }
-      }
-
-      return animations
-    } catch (error) {
-      console.error('Error loading animations:', error)
-      return animations
-    }
-  }
-
-  async convertMixamoClip(clip, asset, vrm) {
-    const tracks = []
-    const restRotationInverse = new THREE.Quaternion()
-    const parentRestWorldRotation = new THREE.Quaternion()
-    const _quatA = new THREE.Quaternion()
-    const _vec3 = new THREE.Vector3()
-
-    const motionHipsHeight = asset.getObjectByName('mixamorigHips')?.position.y || 1
-    const vrmHipsY = vrm.humanoid?.getNormalizedBoneNode('hips')?.getWorldPosition(_vec3).y || 0
-    const vrmRootY = vrm.scene.getWorldPosition(_vec3).y
-    const vrmHipsHeight = Math.abs(vrmHipsY - vrmRootY)
-    const hipsPositionScale = vrmHipsHeight / motionHipsHeight
-
-    clip.tracks.forEach((track) => {
-      const trackSplitted = track.name.split('.')
-      const mixamoRigName = trackSplitted[0]
-      const vrmBoneName = this.mixamoVRMRigMap[mixamoRigName]
-      const vrmNodeName = vrm.humanoid?.getNormalizedBoneNode(vrmBoneName)?.name
-      const mixamoRigNode = asset.getObjectByName(mixamoRigName)
-
-      if (vrmNodeName && mixamoRigNode) {
-        const propertyName = trackSplitted[1]
-
-        mixamoRigNode.getWorldQuaternion(restRotationInverse).invert()
-        mixamoRigNode.parent?.getWorldQuaternion(parentRestWorldRotation)
-
-        if (track instanceof THREE.QuaternionKeyframeTrack) {
-          for (let i = 0; i < track.values.length; i += 4) {
-            const flatQuaternion = track.values.slice(i, i + 4)
-            _quatA.fromArray(flatQuaternion)
-            _quatA.premultiply(parentRestWorldRotation).multiply(restRotationInverse)
-            _quatA.toArray(flatQuaternion)
-            flatQuaternion.forEach((v, index) => {
-              track.values[index + i] = v
-            })
-          }
-
-          tracks.push(
-            new THREE.QuaternionKeyframeTrack(
-              `${vrmNodeName}.${propertyName}`,
-              track.times,
-              track.values.map((v, i) => (vrm.meta?.metaVersion === '0' && i % 2 === 0 ? -v : v))
-            )
-          )
-        } else if (track instanceof THREE.VectorKeyframeTrack) {
-          const value = track.values.map(
-            (v, i) => (vrm.meta?.metaVersion === '0' && i % 3 !== 1 ? -v : v) * hipsPositionScale
-          )
-
-          // Minimize body movement for portrait
-          if (vrmBoneName === 'hips' && propertyName === 'position') {
-            for (let i = 0; i < value.length; i += 3) {
-              value[i] *= 0.2
-              value[i + 1] *= 0.1
-              value[i + 2] *= 0.2
-            }
-          }
-
-          tracks.push(
-            new THREE.VectorKeyframeTrack(`${vrmNodeName}.${propertyName}`, track.times, value)
-          )
-        }
-      }
-    })
-
-    return new THREE.AnimationClip('vrmAnimation', clip.duration, tracks)
-  }
+  // Removed: loadAnimationFromFBX
+  // Removed: loadDefaultAnimations
+  // Removed: convertMixamoClip
 
   cleanupVRM(vrm) {
     if (!vrm) return
@@ -292,13 +143,10 @@ export class VRMLoader {
       }
     })
 
-    this.loadedClips.forEach(clip => {
-      clip.tracks = []
-    })
-    this.loadedClips = []
+    // Removed: this.loadedClips cleanup logic
   }
 
   clearCache() {
-    this.animationCache.clear()
+    // Removed: this.animationCache.clear()
   }
 }

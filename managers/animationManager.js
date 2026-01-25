@@ -1,625 +1,286 @@
-// managers/animationManager.js - COMPLETE FIXED VERSION
-
 import * as THREE from 'three'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation'
 
 export class AnimationManager {
   constructor(vrm) {
     this.vrm = vrm
-    this.currentMixer = null
-    this.idleAnimation = null
-    this.idleAction = null
+    this.mixer = new THREE.AnimationMixer(vrm.scene)
+    this.actions = {}
+    this.activeAction = null
+    this.loader = new GLTFLoader()
+    this.loader.register((parser) => new VRMAnimationLoaderPlugin(parser))
 
-    // Intervals
-    this.blinkInterval = null
-    this.breatheInterval = null
-    this.subtleMovementInterval = null
-    this.eyeMovementInterval = null
-    this.speakingMotionInterval = null
+    this.currentState = 'idle'
+    this.mainIdle = 'HappyIdle'
 
-    // States
-    this.isPlayingSequence = false
-    this.isSpeaking = false
-    this.currentTransition = null
+    // Face State
+    this.currentExpression = 'neutral'
+    this.targetExpression = 'neutral'
+    this.expressionTimer = null
 
-    // Expression mappings - auto-detect based on VRM
-    this.detectedExpressions = {}
+    // Blink State
+    this.blinkTimer = 0
+    this.nextBlinkTime = 3 // seconds
+    this.isBlinking = false
+    this.blinkDuration = 0.15 // seconds
+    this.blinkProgress = 0
 
-    this.EXPRESSIONS = {
-      neutral: ['neutral'],
-      happy: ['happy', 'joy'],
-      sad: ['sad', 'sorrow'],
-      angry: ['angry', 'fury'],
-      surprised: ['surprised', 'shocked'],
-      excited: ['excited', 'happy', 'joy'],
-      confused: ['confused', 'sad'],
-      smirk: ['smirk', 'happy'],
-      laugh: ['happy', 'joy'],
-      embarrassed: ['blink', 'happy'],
-      determined: ['angry'],
-      worried: ['sad', 'blink'],
-      curious: ['surprised'],
-      sleepy: ['relaxed', 'blink'],
-      mischievous: ['smirk', 'wink'],
-      thinking: ['neutral'],
-      shy: ['blink', 'happy']
-    }
+    // Micro-Expression State
+    this.microTimer = 0
+    this.microIntensity = 0
 
-    // Auto-detect available expressions on init
-    this.detectAvailableExpressions()
-  }
+    // Emotion Map (Supports Strings or Weighted Objects)
+    this.expressionMap = {
+      happy: 'happy',
+      joy: 'happy',
+      excited: 'happy',
+      smile: 'happy',
+      sad: 'sad',
+      crying: 'sad',
+      sorrow: 'sad',
 
-  // Detect which expressions actually exist on this VRM
-  detectAvailableExpressions() {
-    if (!this.vrm?.expressionManager) return
+      // Composite Emotions
+      embarrassed: { sad: 0.3, happy: 0.2 }, // Shy smile
+      angry: 'angry',
+      serious: { angry: 0.5 },
+      disgust: { angry: 0.6, sad: 0.2 },
+      frustrated: { angry: 0.7, sad: 0.3 },
 
-    const allExpressions = this.vrm.expressionManager.expressions.map(exp => exp.name)
-    console.log('Available VRM expressions:', allExpressions.join(', '))
+      surprised: 'surprised',
+      shock: { surprised: 1.0, angry: 0.2 },
+      fear: { surprised: 0.5, sad: 0.5 },
+      confused: { angry: 0.4, surprised: 0.2 }, // Furrowed brow + slight wide eye
 
-    // Build a map of what expressions we can use
-    this.detectedExpressions = {}
+      relaxed: 'relaxed',
+      tired: { relaxed: 0.5, sad: 0.2 },
+      fun: 'relaxed',
+      smug: { happy: 0.3, relaxed: 0.3 },
+      thinking: { angry: 0.3, relaxed: 0.2 },
 
-    Object.entries(this.EXPRESSIONS).forEach(([key, fallbacks]) => {
-      for (const fallback of fallbacks) {
-        const found = allExpressions.find(exp =>
-          exp.toLowerCase() === fallback.toLowerCase()
-        )
-        if (found) {
-          this.detectedExpressions[key] = found
-          break
-        }
-      }
-    })
-
-    console.log('Detected usable expressions:', this.detectedExpressions)
-  }
-
-  // Get the actual expression name to use for this VRM
-  getExpressionName(expressionKey) {
-    return this.detectedExpressions[expressionKey] || expressionKey
-  }
-
-  updateVRM(newVrm) {
-    this.cleanup()
-    this.vrm = newVrm
-    this.detectAvailableExpressions()
-    this.startNaturalIdle()
-
-    if (this.idleAnimation) {
-      this.startIdleAnimation()
+      deadpan: 'neutral',
+      neutral: 'neutral',
+      bored: { neutral: 1.0, relaxed: 0.3 },
     }
   }
 
-  setIdleAnimation(animation) {
-    this.idleAnimation = animation
-    console.log('✅ Idle animation set')
+  getAvailableAnimations() {
+    return Object.keys(this.actions)
   }
 
-  // ==================== IDLE ANIMATION CONTROL ====================
+  async initialize() {
+    console.log('🔄 AnimationManager: Loading clips...')
+    this.mixer.addEventListener('finished', (e) => this.onAnimationFinished(e))
 
-  startIdleAnimation() {
-    if (!this.idleAnimation || !this.vrm) {
-      console.log('⚠️ No idle animation, using natural idle only')
-      this.startNaturalIdle()
-      return
+    // ⚡ FIX: Using '/animations/' (Root) and '.fbx' (Actual file type)
+    const files = [
+      { name: 'HappyIdle', path: 'dist/animations/HappyIdle.vrma', loop: true },
+      // ✅ FIX 1: Map Talking to Idle so body breathes while mouth moves
+
+      { name: 'wave', path: 'dist/animations/Waving.vrma', loop: false },
+      // ✅ FIX 2: Macarena must LOOP
+      { name: 'Macarena_dance', path: 'dist/animations/MacarenaDance.vrma', loop: false },
+      { name: 'dance', path: 'dist/animations/HipHopDance.vrma', loop: false },
+
+      { name: 'clap', path: 'dist/animations/Clapping.vrma', loop: false },
+      { name: 'thumbs_up', path: 'dist/animations/ThumbsUp.vrma', loop: false },
+      { name: 'shrug', path: 'dist/animations/Shrugging.vrma', loop: false },
+      { name: 'pointing', path: 'dist/animations/Pointing.vrma', loop: false },
+      { name: 'laugh', path: 'dist/animations/Laughing.vrma', loop: false },
+      { name: 'salute', path: 'dist/animations/Salute.vrma', loop: false },
+      { name: 'angry', path: 'dist/animations/Angry.vrma', loop: false },
+
+      // Proxies
+      { name: 'backflip', path: 'dist/animations/BackFlip.vrma', loop: false },
+      { name: 'acknowledging', path: 'dist/animations/Acknowledging.vrma', loop: false },
+      { name: 'blow_kiss', path: 'dist/animations/BlowKiss.vrma', loop: false },
+      { name: 'bored', path: 'dist/animations/Bored.vrma', loop: false },
+      { name: 'looking_around', path: 'dist/animations/LookingAround.vrma', loop: false },
+    ]
+
+    for (const file of files) {
+      await this.loadClip(file.name, file.path, file.loop)
     }
 
-    this.stopIdleAnimation()
-
-    if (!this.currentMixer) {
-      this.currentMixer = new THREE.AnimationMixer(this.vrm.scene)
-    }
-
-    this.idleAction = this.currentMixer.clipAction(this.idleAnimation)
-    this.idleAction.setLoop(THREE.LoopRepeat)
-    this.idleAction.setEffectiveWeight(0.15)
-    this.idleAction.timeScale = 0.7
-    this.idleAction.play()
-
-    console.log('✅ Idle animation started')
-
-    // Only blinking and breathing during idle
-    this.startEnhancedBlinking()
-    this.startSubtleBreathing()
+    console.log('✅ AnimationManager Ready')
+    this.play(this.mainIdle)
   }
 
-  stopIdleAnimation() {
-    if (this.idleAction) {
-      this.idleAction.fadeOut(0.3)
-      setTimeout(() => {
-        if (this.idleAction) {
-          this.idleAction.stop()
-        }
-      }, 300)
-      this.idleAction = null
-      console.log('⏸️ Idle animation stopped')
-    }
-  }
+  setExpression(name, duration = 0) {
+    const rawName = name.toLowerCase()
+    let resolved = 'neutral' // Can be string or object
 
-  pauseIdleForSpeaking() {
-    if (this.idleAction) {
-      this.idleAction.stop()
-      console.log('🗣️ Idle paused for speaking')
-    }
-    this.stopAllNaturalAnimations()
-  }
-
-  resumeIdleAfterSpeaking() {
-    if (this.idleAction && this.idleAnimation) {
-      this.idleAction.reset()
-      this.idleAction.play()
-      console.log('▶️ Idle resumed after speaking')
-    }
-    this.startNaturalIdle()
-  }
-
-  // ==================== NATURAL ANIMATIONS ====================
-
-  startNaturalIdle() {
-    if (!this.vrm) return
-
-    this.startEnhancedBlinking()
-    this.startSubtleBreathing()
-
-    if (!this.isSpeaking && !this.idleAnimation) {
-      this.startMinimalHeadMovements()
+    if (this.vrm.expressionManager.getExpressionTrackName(rawName)) {
+      resolved = rawName // Direct match
+    } else if (this.expressionMap[rawName]) {
+      resolved = this.expressionMap[rawName] // Map match
     }
 
-    console.log('✨ Natural idle started')
-  }
-
-  stopAllNaturalAnimations() {
-    if (this.subtleMovementInterval) {
-      clearInterval(this.subtleMovementInterval)
-      this.subtleMovementInterval = null
-    }
-
-    if (this.eyeMovementInterval) {
-      clearInterval(this.eyeMovementInterval)
-      this.eyeMovementInterval = null
-    }
-
-    console.log('🛑 Natural animations stopped')
-  }
-
-  startEnhancedBlinking() {
-    if (!this.vrm?.expressionManager) return
-    if (this.blinkInterval) clearTimeout(this.blinkInterval)
-
-    const blinkExpression = this.getExpressionName('neutral')
-
-    const doBlink = () => {
-      if (!this.vrm?.expressionManager) {
-        this.blinkInterval = setTimeout(doBlink, 3000)
-        return
-      }
-
-      const intensity = 0.9 + Math.random() * 0.1
-      const blinkDuration = 60 + Math.random() * 40
-      const isDoubleBlink = Math.random() < 0.15
-
-      // Try blink expression first, fallback to neutral
-      let blinkExpr = 'blink'
-      if (!this.detectedExpressions[blinkExpr] && this.vrm.expressionManager.expressions.find(e => e.name === 'blink') === undefined) {
-        blinkExpr = blinkExpression
-      }
-
-      if (this.vrm.expressionManager.expressions.find(e => e.name === blinkExpr)) {
-        this.vrm.expressionManager.setValue(blinkExpr, intensity)
-        this.vrm.expressionManager.update()
-
-        setTimeout(() => {
-          if (this.vrm?.expressionManager) {
-            this.vrm.expressionManager.setValue(blinkExpr, 0)
-            this.vrm.expressionManager.update()
-
-            if (isDoubleBlink) {
-              setTimeout(() => {
-                if (this.vrm?.expressionManager) {
-                  this.vrm.expressionManager.setValue(blinkExpr, intensity * 0.85)
-                  this.vrm.expressionManager.update()
-                  setTimeout(() => {
-                    if (this.vrm?.expressionManager) {
-                      this.vrm.expressionManager.setValue(blinkExpr, 0)
-                      this.vrm.expressionManager.update()
-                    }
-                  }, blinkDuration * 0.6)
-                }
-              }, 120)
-            }
-          }
-
-          const nextBlink = 2000 + Math.random() * 3000
-          this.blinkInterval = setTimeout(doBlink, nextBlink)
-        }, blinkDuration)
-      }
-    }
-
-    doBlink()
-  }
-
-  startSubtleBreathing() {
-    if (!this.vrm) return
-    if (this.breatheInterval) clearInterval(this.breatheInterval)
-
-    const chest = this.vrm.humanoid?.getNormalizedBoneNode('chest')
-    const upperChest = this.vrm.humanoid?.getNormalizedBoneNode('upperChest')
-
-    if (!chest) return
-
-    let breathPhase = 0
-
-    this.breatheInterval = setInterval(() => {
-      breathPhase += 0.008
-      const breathIntensity = Math.sin(breathPhase) * 0.008
-
-      if (chest) {
-        chest.rotation.x = breathIntensity
-      }
-      if (upperChest) {
-        upperChest.rotation.x = breathIntensity * 0.5
-      }
-    }, 50)
-  }
-
-  startMinimalHeadMovements() {
-    if (!this.vrm) return
-    if (this.subtleMovementInterval) clearInterval(this.subtleMovementInterval)
-
-    const head = this.vrm.humanoid?.getNormalizedBoneNode('head')
-    const neck = this.vrm.humanoid?.getNormalizedBoneNode('neck')
-
-    if (!head) return
-
-    const baseHead = head.rotation.clone()
-    const baseNeck = neck?.rotation.clone()
-
-    let phase = 0
-
-    this.subtleMovementInterval = setInterval(() => {
-      if (this.isPlayingSequence || this.isSpeaking) return
-
-      phase += 0.004
-
-      const headSway = Math.sin(phase * 0.4) * 0.012
-      const headTilt = Math.cos(phase * 0.3) * 0.01
-      const headNod = Math.sin(phase * 0.2) * 0.008
-
-      if (head) {
-        head.rotation.y = baseHead.y + headSway
-        head.rotation.z = baseHead.z + headTilt
-        head.rotation.x = baseHead.x + headNod
-      }
-
-      if (neck && baseNeck) {
-        neck.rotation.x = baseNeck.x + Math.sin(phase * 0.15) * 0.006
-      }
-    }, 50)
-  }
-
-  // ==================== SPEAKING ANIMATIONS ====================
-
-  startSpeakingAnimation() {
-    this.isSpeaking = true
-    this.pauseIdleForSpeaking()
-    console.log('🗣️ Speaking started')
-
-    // Get relevant bones
-    const leftUpperArm = this.vrm.humanoid?.getNormalizedBoneNode('leftUpperArm')
-    const rightUpperArm = this.vrm.humanoid?.getNormalizedBoneNode('rightUpperArm')
-    const leftLowerArm = this.vrm.humanoid?.getNormalizedBoneNode('leftLowerArm')
-    const rightLowerArm = this.vrm.humanoid?.getNormalizedBoneNode('rightLowerArm')
-    const chest = this.vrm.humanoid?.getNormalizedBoneNode('upperChest') || this.vrm.humanoid?.getNormalizedBoneNode('chest')
-
-    if (!leftUpperArm || !rightUpperArm) {
-      console.warn('⚠️ Arm bones not found in VRM!')
-      return
-    }
-
-    let t = 0
-    const armAmp = 0.25    // amplitude
-    const armSpeed = 3.0   // speed
-    const chestAmp = 0.1
-
-    const animateLimbMovement = () => {
-      if (!this.isSpeaking) return // stop when speech ends
-
-      t += 0.05
-
-      // Gentle waving
-      const wave = Math.sin(t * armSpeed) * armAmp
-      const counter = Math.sin(t * armSpeed + Math.PI) * armAmp * 0.8
-
-      leftUpperArm.rotation.z = wave
-      rightUpperArm.rotation.z = -wave
-
-      if (leftLowerArm) leftLowerArm.rotation.z = wave * 0.5
-      if (rightLowerArm) rightLowerArm.rotation.z = -wave * 0.5
-
-      if (chest) chest.rotation.y = Math.sin(t * armSpeed * 0.5) * chestAmp
-
-      requestAnimationFrame(animateLimbMovement)
-    }
-
-    animateLimbMovement()
-  }
-
-  stopSpeakingAnimation() {
-    this.isSpeaking = false
-
-    if (this.speakingMotionInterval) {
-      clearInterval(this.speakingMotionInterval)
-      this.speakingMotionInterval = null
-    }
-
-    this.resumeIdleAfterSpeaking()
-    console.log('🔇 Speaking stopped')
-  }
-
-  // ==================== EXPRESSION SYSTEM ====================
-
-  async setExpression(expression, intensity = 0.7, duration = 400) {
-    if (!this.vrm?.expressionManager) return
-
-    // Get the actual expression name for this VRM
-    const mappedExpression = this.getExpressionName(expression)
-    const expressions = this.EXPRESSIONS[expression] || [expression]
-
-    if (this.currentTransition) {
-      cancelAnimationFrame(this.currentTransition)
-    }
-
-    const startValues = {}
-    const targetValues = {}
-
-    expressions.forEach(expr => {
-      const mappedExpr = this.getExpressionName(expr)
-      if (this.vrm.expressionManager.expressions.find(e => e.name === mappedExpr)) {
-        startValues[mappedExpr] = this.vrm.expressionManager.getValue(mappedExpr) || 0
-        targetValues[mappedExpr] = Math.min(intensity, 1.0)
-      }
-    })
-
-    if (Object.keys(startValues).length === 0) {
-      return // No valid expressions found
-    }
-
-    return new Promise((resolve) => {
-      const startTime = performance.now()
-
-      const animate = (now) => {
-        const elapsed = now - startTime
-        const t = Math.min(elapsed / duration, 1)
-        const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
-
-        Object.keys(startValues).forEach(expr => {
-          const value = startValues[expr] + (targetValues[expr] - startValues[expr]) * eased
-          this.vrm.expressionManager.setValue(expr, value)
-        })
-
-        this.vrm.expressionManager.update()
-
-        if (t < 1) {
-          this.currentTransition = requestAnimationFrame(animate)
-        } else {
-          this.currentTransition = null
-          resolve()
-        }
-      }
-
-      this.currentTransition = requestAnimationFrame(animate)
-    })
-  }
-
-  async resetExpression(expression, duration = 350) {
-    await this.setExpression(expression, 0, duration)
-  }
-
-  // ==================== HEAD MOTION SYSTEM ====================
-
-  async animateHeadMotion(type, duration = 700) {
-    if (!this.vrm) return
-
-    const head = this.vrm.humanoid?.getNormalizedBoneNode('head')
-    const neck = this.vrm.humanoid?.getNormalizedBoneNode('neck')
-    if (!head) return
-
-    const startRotHead = head.rotation.clone()
-    const startRotNeck = neck?.rotation.clone()
-    const targetRot = new THREE.Euler()
-    const neckTarget = new THREE.Euler()
-
-    let curve = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
-
-    switch (type) {
-      case 'nod':
-        targetRot.set(0.4, 0, 0)
-        neckTarget.set(0.18, 0, 0)
-        break
-      case 'shake':
-        targetRot.set(0, 0.45, 0)
-        curve = (t) => Math.sin(t * Math.PI * 2.5) * (1 - t)
-        break
-      case 'tiltLeft':
-        targetRot.set(0, 0.12, 0.35)
-        break
-      case 'tiltRight':
-        targetRot.set(0, -0.12, -0.35)
-        break
-      case 'lookUp':
-        targetRot.set(-0.3, 0, 0)
-        neckTarget.set(-0.12, 0, 0)
-        break
-      case 'lookDown':
-        targetRot.set(0.3, 0, 0)
-        neckTarget.set(0.12, 0, 0)
-        break
-      case 'doubleNod':
-        targetRot.set(0.4, 0, 0)
-        neckTarget.set(0.18, 0, 0)
-        curve = (t) => Math.sin(t * Math.PI * 4) * (1 - t * 0.3)
-        duration *= 1.3
-        break
-      case 'confused':
-        targetRot.set(0.12, 0.25, 0.25)
-        curve = (t) => Math.sin(t * Math.PI * 3)
-        break
-      default:
-        return
-    }
-
-    return new Promise((resolve) => {
-      const startTime = performance.now()
-
-      const animate = (now) => {
-        const elapsed = now - startTime
-        const t = Math.min(elapsed / duration, 1)
-        const eased = curve(t)
-
-        head.rotation.x = startRotHead.x + targetRot.x * eased
-        head.rotation.y = startRotHead.y + targetRot.y * eased
-        head.rotation.z = startRotHead.z + targetRot.z * eased
-
-        if (neck && neckTarget.x !== 0) {
-          neck.rotation.x = startRotNeck.x + neckTarget.x * eased
-        }
-
-        if (t < 1) {
-          requestAnimationFrame(animate)
-        } else {
-          const returnDuration = 400
-          const returnStart = performance.now()
-
-          const returnAnimate = (now) => {
-            const elapsed = now - returnStart
-            const rt = Math.min(elapsed / returnDuration, 1)
-            const eased = rt < 0.5 ? 2 * rt * rt : 1 - Math.pow(-2 * rt + 2, 2) / 2
-
-            head.rotation.x += (startRotHead.x - head.rotation.x) * eased
-            head.rotation.y += (startRotHead.y - head.rotation.y) * eased
-            head.rotation.z += (startRotHead.z - head.rotation.z) * eased
-
-            if (neck && startRotNeck) {
-              neck.rotation.x += (startRotNeck.x - neck.rotation.x) * eased
-            }
-
-            if (rt < 1) {
-              requestAnimationFrame(returnAnimate)
-            } else {
-              resolve()
-            }
-          }
-          requestAnimationFrame(returnAnimate)
-        }
-      }
-      requestAnimationFrame(animate)
-    })
-  }
-
-  // ==================== ANIMATION SEQUENCE PLAYER ====================
-
-  async playAnimationSequence(plan) {
-    if (!this.vrm?.expressionManager || !plan || plan.length === 0) return
-
-    this.isPlayingSequence = true
-    console.log('🎬 Playing animation sequence:', plan.length, 'steps')
-
-    this.startSpeakingAnimation()
-
-    try {
-      for (let i = 0; i < plan.length; i++) {
-        const step = plan[i]
-        const intensity = Math.min((step.intensity || 0.7) * 1.5, 1.0)
-
-        const animations = []
-
-        // Set expression with detected names
-        if (step.expression && step.expression !== 'neutral') {
-          animations.push(this.setExpression(step.expression, intensity, 400))
-        }
-
-        // Head motion
-        if (step.headMotion && step.headMotion !== 'none') {
-          animations.push(
-            this.animateHeadMotion(
-              step.headMotion,
-              Math.min(step.duration * 0.7, 1000)
-            )
-          )
-        }
-
-        await Promise.all(animations)
-        await new Promise(r => setTimeout(r, Math.max(step.duration * 0.5, 300)))
-
-        // Reset expression
-        if (step.expression && step.expression !== 'neutral') {
-          await this.resetExpression(step.expression, 300)
-        }
-
-        if (i < plan.length - 1) {
-          await new Promise(r => setTimeout(r, 100))
-        }
-      }
-
-      console.log('✅ Animation sequence complete')
-    } catch (error) {
-      console.error('❌ Animation sequence error:', error)
-    } finally {
-      this.stopSpeakingAnimation()
-      this.isPlayingSequence = false
+    console.log(`😊 Face: ${name} =>`, resolved, `(${duration}s)`)
+    this.targetExpression = resolved
+
+    if (this.expressionTimer) clearTimeout(this.expressionTimer)
+    if (duration > 0) {
+      this.expressionTimer = setTimeout(() => {
+        this.targetExpression = 'neutral'
+      }, duration * 1000)
     }
   }
-
-  // ==================== UPDATE & CLEANUP ====================
 
   update(delta) {
-    if (this.currentMixer) {
-      this.currentMixer.update(delta)
+    if (this.mixer) this.mixer.update(delta)
+    if (this.vrm && this.vrm.expressionManager) {
+      this.updateBlink(delta)
+      this.updateExpressions(delta)
     }
+  }
+
+  updateBlink(delta) {
+    this.blinkTimer += delta
+    if (this.blinkTimer >= this.nextBlinkTime) {
+      this.isBlinking = true
+      this.blinkTimer = 0
+      this.nextBlinkTime = 2 + Math.random() * 3 // Random blink interval 2-5s
+    }
+
+    if (this.isBlinking) {
+      this.blinkProgress += delta
+      if (this.blinkProgress >= this.blinkDuration) {
+        this.isBlinking = false
+        this.blinkProgress = 0
+      }
+    }
+  }
+
+  updateExpressions(delta) {
+    const manager = this.vrm.expressionManager
+    const speed = 5.0 * delta
+
+    // 1. Calculate Blink Value (Sine wave for smoothness)
+    let blinkValue = 0
+    if (this.isBlinking) {
+      const t = Math.PI * (this.blinkProgress / this.blinkDuration)
+      blinkValue = Math.sin(t)
+    }
+
+    // 2. Micro-Expressions (Breathing/Subtle movement on mood)
+    this.microTimer += delta
+    this.microIntensity = Math.sin(this.microTimer * 2) * 0.05 // +/- 0.05 variation
+
+    // 3. Define Key Groups
+    const moodKeys = ['neutral', 'happy', 'angry', 'sad', 'relaxed', 'surprised']
+    const mouthKeys = ['aa', 'ee', 'ih', 'oh', 'ou']
+
+    // 4. Update Moods
+    moodKeys.forEach((key) => {
+      const currentVal = manager.getValue(key) || 0
+
+      // Calculate Target for this specific blendshape key
+      let baseTarget = 0.0
+
+      if (typeof this.targetExpression === 'string') {
+        // Simple Mode: Single Winner
+        baseTarget = key === this.targetExpression ? 1.0 : 0.0
+      } else if (typeof this.targetExpression === 'object') {
+        // Composite Mode: Weighted Blend
+        baseTarget = this.targetExpression[key] || 0.0
+      }
+
+      // Add Micro-Expressions only if this key is active (prevents phantom twitching on 0 values)
+      if (baseTarget > 0.1) {
+        baseTarget += this.microIntensity
+      }
+
+      // Clamp
+      baseTarget = Math.max(0, Math.min(1, baseTarget))
+
+      const newVal = THREE.MathUtils.lerp(currentVal, baseTarget, speed)
+      manager.setValue(key, newVal < 0.01 ? 0 : newVal)
+    })
+
+    // 5. Update Eyes (Blink overrides mood-based eye shapes if needed, but usually additive is fine)
+    // For standard VRM, 'blink' controls both.
+    manager.setValue('blink', blinkValue)
+
+    // 6. Update Mouth
+    // If talking, we let external lip-sync control it (so we do NOTHING or blend to 0 if we want to enforce silence)
+    // Current logic: If NOT talking, force mouth closed. If Talking, ignore (let SpeechManager/Audio handle it).
+    if (this.currentState !== 'talking') {
+      mouthKeys.forEach((key) => {
+        const currentVal = manager.getValue(key) || 0
+        const newVal = THREE.MathUtils.lerp(currentVal, 0, speed)
+        manager.setValue(key, newVal < 0.01 ? 0 : newVal)
+      })
+    }
+
+    manager.update()
+  }
+
+  triggerNamedAnimation(name) {
+    if (this.actions[name]) this.play(name)
+    else console.warn(`⚠️ Animation ${name} not found.`)
+  }
+
+  onAnimationFinished(e) {
+    const clipName = e.action.getClip().name
+    if (clipName !== 'HappyIdle' && clipName !== 'dance' && clipName !== 'Talking') {
+      this.play(this.mainIdle)
+    }
+  }
+
+  async loadClip(name, url, isLoop) {
+    return new Promise((resolve) => {
+      this.loader.load(
+        url,
+        (gltf) => {
+          let clip = null
+          // Handle VRMA vs FBX structure
+          if (gltf.userData.vrmAnimations && gltf.userData.vrmAnimations.length > 0) {
+            clip = createVRMAnimationClip(gltf.userData.vrmAnimations[0], this.vrm)
+          } else if (gltf.animations && gltf.animations.length > 0) {
+            clip = createVRMAnimationClip(gltf.animations[0], this.vrm)
+          }
+
+          if (clip) {
+            clip.name = name
+            const action = this.mixer.clipAction(clip)
+            action.loop = isLoop ? THREE.LoopRepeat : THREE.LoopOnce
+            action.clampWhenFinished = !isLoop
+            this.actions[name] = action
+            resolve(action)
+          } else {
+            console.warn(`⚠️ Empty animation: ${url}`)
+            resolve(null)
+          }
+        },
+        undefined,
+        (err) => {
+          console.warn(`❌ Load failed: ${url}`, err)
+          resolve(null)
+        },
+      )
+    })
+  }
+
+  play(name) {
+    const action = this.actions[name]
+    if (!action) return
+    if (this.activeAction === action) return
+    if (this.activeAction) this.activeAction.fadeOut(0.5)
+    action.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.5).play()
+    this.activeAction = action
+    if (name === 'Talking') this.currentState = 'talking'
+    else if (name === this.mainIdle) this.currentState = 'idle'
+  }
+
+  setSpeakingState(isSpeaking) {
+    if (this.activeAction && !this.activeAction.loop && this.activeAction.isRunning()) return
+    if (isSpeaking && this.currentState !== 'talking') this.play('Talking')
+    else if (!isSpeaking && this.currentState === 'talking') this.play(this.mainIdle)
   }
 
   cleanup() {
-    console.log('🧹 Cleaning up AnimationManager...')
-
-    if (this.blinkInterval) {
-      clearTimeout(this.blinkInterval)
-      this.blinkInterval = null
-    }
-
-    if (this.breatheInterval) {
-      clearInterval(this.breatheInterval)
-      this.breatheInterval = null
-    }
-
-    if (this.subtleMovementInterval) {
-      clearInterval(this.subtleMovementInterval)
-      this.subtleMovementInterval = null
-    }
-
-    if (this.eyeMovementInterval) {
-      clearInterval(this.eyeMovementInterval)
-      this.eyeMovementInterval = null
-    }
-
-    if (this.speakingMotionInterval) {
-      clearInterval(this.speakingMotionInterval)
-      this.speakingMotionInterval = null
-    }
-
-    if (this.currentTransition) {
-      cancelAnimationFrame(this.currentTransition)
-      this.currentTransition = null
-    }
-
-    if (this.currentMixer) {
-      this.currentMixer.stopAllAction()
-      this.currentMixer = null
-    }
-
-    this.idleAction = null
-    this.isPlayingSequence = false
-    this.isSpeaking = false
-    this.detectedExpressions = {}
-
-    console.log('✅ AnimationManager cleanup complete')
+    if (this.mixer) this.mixer.stopAllAction()
+    if (this.expressionTimer) clearTimeout(this.expressionTimer)
   }
 }

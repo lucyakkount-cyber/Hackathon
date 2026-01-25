@@ -16,7 +16,7 @@ try {
 
 // === SoVITS function ===
 export async function sovitsGen(inText, outputPath = 'output.wav') {
-  const url = '  https://mall-bless-not-disturbed.trycloudflare.com/'
+  const url = '  http://127.0.0.1:9880/'
 
   const refAudioPath = charConfig?.sovits_ping_config?.ref_audio_path
   if (!refAudioPath || !fs.existsSync(refAudioPath)) {
