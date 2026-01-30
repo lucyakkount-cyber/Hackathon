@@ -1,3 +1,4 @@
+OPENAI_API_KEY: AIzaSyBDuaxd8wrHGcBUXDSyqX41QcYvtCPEe6M
 history_file: chat_history.json
 model: 'gemini-2.5-flash-native-audio-preview-12-2025'
 presets:
