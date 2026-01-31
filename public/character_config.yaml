@@ -1,5 +1,6 @@
 history_file: chat_history.json
 model: 'models/gemini-2.5-flash-native-audio-preview-12-2025'
+vrm_model: 'models/nature.vrm'
 presets:
   default:
     system_prompt: |
