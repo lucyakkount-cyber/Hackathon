@@ -36,13 +36,13 @@ export class ConfigManager {
 
   getDefaultConfig() {
     return {
-      OPENAI_API_KEY: import.meta.env.VITE_GEMINI_API_KEY || '',
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || '',
       presets: {
         default: {
           system_prompt: `You are a helpful AI assistant. You are friendly, enthusiastic, and enjoy helping users with their questions and tasks. Keep your responses conversational and engaging.
           IMPORTANT: Never end the conversation unless explicitly told to. Keep listening.`,
         },
-      },
+      },  
       sovits_ping_config: {
         ref_audio_path: '/audio/reference.wav',
         text_lang: 'en',
