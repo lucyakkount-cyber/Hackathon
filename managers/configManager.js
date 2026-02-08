@@ -93,7 +93,7 @@ export class ConfigManager {
     return this.get('vrm_config', {
       model_path: this.config.vrm_model,
       scale: 2,
-      position: { x: 0, y: -2, z: -0.5 },
+      position: { x: 0, y: -2.5, z: -0.5 },
       rotation: { x: 0, y: Math.PI, z: 0 },
     })
   }

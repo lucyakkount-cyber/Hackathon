@@ -48,8 +48,7 @@ export class VRMLoader {
 
     // Portrait mode positioning
     vrm.scene.rotation.y = Math.PI
-    // vrm.scene.scale.set(2.5, 2.5, 2.5)
-    vrm.scene.scale.set(2, 2, 2)
+    vrm.scene.scale.set(2.5, 2.5, 2.5)
     vrm.scene.position.set(0, -1.2, -0.3)
     vrm.scene.castShadow = true
     vrm.scene.receiveShadow = true

@@ -29,7 +29,7 @@ export const BUILD_DATE = new Date().toISOString()
 // Default configuration for easy setup
 export const DEFAULT_CONFIG = {
   vrm: {
-    modelPath: '/models/nature.vrm',
+    modelPath: '/models/rika.vrm',
     scale: 2,
     position: { x: 0, y: -2, z: -0.5 },
   },
@@ -120,7 +120,7 @@ export async function createVRMChatSystem(canvas, config = {}) {
         const availableAnims = animationManager.getAvailableAnimations()
 
         await aiClient.connectLive(
-          'You are V-Tuber nature.vrm. You are lively, expressive, and helpful.',
+          'You are V-Tuber riko.vrm. You are lively, expressive, and helpful.',
           (audioData) => audioManager.queueAudio(audioData),
           (animName) => animationManager.triggerNamedAnimation(animName),
           (exprName, dur) => animationManager.setExpression(exprName, dur),
