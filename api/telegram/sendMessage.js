@@ -1,4 +1,4 @@
-import { relayTelegramMethod } from './_relay.js'
+import { relayTelegramMethod } from '../../server/telegramRelay.js'
 
 export default async function handler(req, res) {
   return relayTelegramMethod(req, res, 'sendMessage')
