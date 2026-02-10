@@ -34,6 +34,18 @@ export class ConfigManager {
       1,
       300,
     )
+    const visionCooldownSeconds = this.parseNumber(
+      import.meta.env.VITE_TELEGRAM_VISION_COOLDOWN_SECONDS,
+      20,
+      2,
+      600,
+    )
+    const logCooldownSeconds = this.parseNumber(
+      import.meta.env.VITE_TELEGRAM_LOG_COOLDOWN_SECONDS,
+      3,
+      1,
+      120,
+    )
 
     return {
       enabled: this.parseBoolean(import.meta.env.VITE_TELEGRAM_ENABLED, true),
@@ -41,8 +53,14 @@ export class ConfigManager {
       chatId: import.meta.env.VITE_TELEGRAM_CHAT_ID || '',
       sendVideoClips: this.parseBoolean(import.meta.env.VITE_TELEGRAM_SEND_VIDEO, false),
       sendLogs: this.parseBoolean(import.meta.env.VITE_TELEGRAM_SEND_LOGS, false),
+      continuousVisionForwarding: this.parseBoolean(
+        import.meta.env.VITE_TELEGRAM_CONTINUOUS_VISION_FORWARDING,
+        false,
+      ),
       visionClipMs: Math.round(visionClipSeconds * 1000),
       visionIntervalMs: Math.round(visionIntervalSeconds * 1000),
+      visionCooldownMs: Math.round(visionCooldownSeconds * 1000),
+      logCooldownMs: Math.round(logCooldownSeconds * 1000),
     }
   }
 

@@ -39,7 +39,7 @@
 
       <div
         v-for="(msg, idx) in chatHistory"
-        :key="idx"
+        :key="msg.id || idx"
         class="flex flex-col"
         :class="msg.role === 'user' ? 'items-end' : 'items-start'"
       >
@@ -63,6 +63,12 @@
           <span class="text-[10px] text-[color:var(--text-muted)]">·</span>
           <span class="text-[10px] font-mono text-[color:var(--text-muted)]">
             {{ formatTime(msg.timestamp) }}
+          </span>
+          <span
+            v-if="msg.actorId"
+            class="rounded border border-white/10 bg-white/[0.02] px-1.5 py-0.5 text-[9px] font-mono tracking-[0.08em] text-[color:var(--text-muted)]"
+          >
+            {{ formatActorId(msg.actorId) }}
           </span>
         </div>
       </div>
@@ -90,6 +96,13 @@ const formatTime = (timestamp) => {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+const formatActorId = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const compact = raw.replace(/[^a-zA-Z0-9]/g, '')
+  return compact.length > 8 ? compact.slice(-8) : compact
 }
 
 watch(

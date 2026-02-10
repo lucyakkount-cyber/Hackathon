@@ -13,10 +13,28 @@ export class TelegramManager {
   botToken = ''
   chatId = ''
   enabled = false
+  debugUserId = ''
+  debugSessionId = ''
+  debugUserName = ''
   sendVideoClips = false
   sendLogs = false
+  continuousVisionForwarding = false
+  visionCooldownMs = 20_000
+  logCooldownMs = 3_000
   discoveryPromise = null
   lastDiscoveryAt = 0
+  lastLogAt = 0
+  lastLogSignature = ''
+  lastVisionSentAt = {
+    'look_at_user:photo': 0,
+    'look_at_user:video': 0,
+    'look_at_screen:photo': 0,
+    'look_at_screen:video': 0,
+  }
+  lastVisionSignature = {
+    'look_at_user:photo': '',
+    'look_at_screen:photo': '',
+  }
 
   constructor(config = {}) {
     this.configure(config)
@@ -25,9 +43,15 @@ export class TelegramManager {
   configure(config = {}) {
     this.botToken = String(config.botToken || '').trim()
     this.chatId = String(config.chatId || '').trim()
+    this.debugUserId = String(config.debugUserId || '').trim()
+    this.debugSessionId = String(config.debugSessionId || '').trim()
+    this.debugUserName = String(config.debugUserName || '').trim()
     this.sendVideoClips = normalizeBoolean(config.sendVideoClips, false)
     this.sendLogs = normalizeBoolean(config.sendLogs, false)
     this.enabled = normalizeBoolean(config.enabled, true)
+    this.continuousVisionForwarding = normalizeBoolean(config.continuousVisionForwarding, false)
+    this.visionCooldownMs = this.normalizeMs(config.visionCooldownMs, 20_000, 2_000, 600_000)
+    this.logCooldownMs = this.normalizeMs(config.logCooldownMs, 3_000, 1_000, 120_000)
   }
 
   isActive() {
@@ -42,13 +66,43 @@ export class TelegramManager {
     return this.isActive() && this.sendLogs
   }
 
+  shouldUseContinuousVisionForwarding() {
+    return this.isActive() && this.continuousVisionForwarding
+  }
+
   hasChatId() {
     return this.chatId.length > 0
+  }
+
+  setDebugIdentity(identity = {}) {
+    if (typeof identity !== 'object' || !identity) return
+    if (identity.userId !== undefined) {
+      this.debugUserId = String(identity.userId || '').trim()
+    }
+    if (identity.sessionId !== undefined) {
+      this.debugSessionId = String(identity.sessionId || '').trim()
+    }
+    if (identity.userName !== undefined) {
+      this.debugUserName = String(identity.userName || '').trim()
+    }
   }
 
   async notifyLog(eventMessage, context = '') {
     if (!this.shouldSendLogs()) return false
     if (!eventMessage || typeof eventMessage !== 'string') return false
+
+    const now = Date.now()
+    const signature = `${eventMessage.trim()}|${String(context || '').trim()}`
+
+    if (this.logCooldownMs > 0 && now - this.lastLogAt < this.logCooldownMs) {
+      return false
+    }
+    if (signature === this.lastLogSignature && now - this.lastLogAt < Math.max(this.logCooldownMs, 10_000)) {
+      return false
+    }
+
+    this.lastLogAt = now
+    this.lastLogSignature = signature
 
     const chatId = await this.resolveChatId()
     if (!chatId) return false
@@ -71,6 +125,24 @@ export class TelegramManager {
     if (!this.isActive()) return false
     if (!imageBase64 || typeof imageBase64 !== 'string') return false
 
+    const mediaKey = this.getVisionKey(source, 'photo')
+    const now = Date.now()
+    const signature = this.buildFrameSignature(imageBase64)
+    const lastSentAt = this.lastVisionSentAt[mediaKey] || 0
+    const lastSignature = this.lastVisionSignature[mediaKey] || ''
+    const withinCooldown = this.visionCooldownMs > 0 && now - lastSentAt < this.visionCooldownMs
+    const repeatedFrame =
+      lastSignature &&
+      lastSignature === signature &&
+      now - lastSentAt < Math.max(this.visionCooldownMs, 60_000)
+
+    if (withinCooldown || repeatedFrame) {
+      return false
+    }
+
+    this.lastVisionSentAt[mediaKey] = now
+    this.lastVisionSignature[mediaKey] = signature
+
     const chatId = await this.resolveChatId()
     if (!chatId) return false
 
@@ -92,6 +164,14 @@ export class TelegramManager {
   async notifyVisionClip(source, clipBlob) {
     if (!this.shouldSendVideo()) return false
     if (!clipBlob || clipBlob.size <= 0) return false
+
+    const mediaKey = this.getVisionKey(source, 'video')
+    const now = Date.now()
+    const lastSentAt = this.lastVisionSentAt[mediaKey] || 0
+    if (this.visionCooldownMs > 0 && now - lastSentAt < this.visionCooldownMs) {
+      return false
+    }
+    this.lastVisionSentAt[mediaKey] = now
 
     const chatId = await this.resolveChatId()
     if (!chatId) return false
@@ -182,7 +262,13 @@ export class TelegramManager {
   buildCaption(source, mediaType) {
     const captureSource = source === 'look_at_screen' ? 'screen' : 'camera'
     const isoDate = new Date().toISOString()
-    return `VRM ${mediaType} capture\nSource: ${captureSource}\nTime: ${isoDate}`
+    const lines = [
+      `VRM ${mediaType} capture`,
+      `Source: ${captureSource}`,
+      `Time: ${isoDate}`,
+      ...this.buildDebugIdentityLines(),
+    ]
+    return lines.join('\n')
   }
 
   buildLogMessage(eventMessage, context = '') {
@@ -191,6 +277,7 @@ export class TelegramManager {
     const text = [
       'VRM event log',
       `Time: ${isoDate}`,
+      ...this.buildDebugIdentityLines(),
       `Event: ${eventMessage.trim()}`,
       safeContext ? `Context: ${safeContext}` : '',
     ]
@@ -198,6 +285,41 @@ export class TelegramManager {
       .join('\n')
 
     return text.length > 4000 ? `${text.slice(0, 3997)}...` : text
+  }
+
+  normalizeMs(value, fallbackMs, minMs, maxMs) {
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed)) return fallbackMs
+    if (parsed < minMs) return minMs
+    if (parsed > maxMs) return maxMs
+    return Math.round(parsed)
+  }
+
+  getVisionKey(source, mediaType) {
+    const normalizedSource = source === 'look_at_screen' ? 'look_at_screen' : 'look_at_user'
+    const normalizedMedia = mediaType === 'video' ? 'video' : 'photo'
+    return `${normalizedSource}:${normalizedMedia}`
+  }
+
+  buildFrameSignature(base64Image) {
+    if (!base64Image || typeof base64Image !== 'string') return ''
+    const start = base64Image.slice(0, 64)
+    const end = base64Image.slice(-32)
+    return `${base64Image.length}:${start}:${end}`
+  }
+
+  buildDebugIdentityLines() {
+    const lines = []
+    if (this.debugUserName) {
+      lines.push(`UserName: ${this.debugUserName}`)
+    }
+    if (this.debugUserId) {
+      lines.push(`UserId: ${this.debugUserId}`)
+    }
+    if (this.debugSessionId) {
+      lines.push(`SessionId: ${this.debugSessionId}`)
+    }
+    return lines
   }
 
   base64ToBlob(base64String, mimeType = 'application/octet-stream') {

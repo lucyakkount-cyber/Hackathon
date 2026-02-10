@@ -26,6 +26,12 @@ export class AIClient {
   isDisconnecting = false
   isSessionOpen = false
   isReconnecting = false
+  reconnectAttempts = 0
+  maxReconnectAttempts = 12
+  reconnectBaseDelayMs = 2000
+  reconnectMaxDelayMs = 20_000
+  reconnectTimer = null
+  reconnectHistorySuggestionSent = false
   connectionArgs = null
   recognition = null
   onDisconnectCallback = null
@@ -69,6 +75,9 @@ export class AIClient {
     console.log(`🔌 Connecting to Gemini Live... (Mic: ${enableMic})`)
     this.isDisconnecting = false
     this.isReconnecting = false
+    this.reconnectAttempts = 0
+    this.reconnectHistorySuggestionSent = false
+    this._clearReconnectTimer()
     this.internalHistory = []
     this.onDisconnectCallback = onDisconnect || null
 
@@ -200,6 +209,9 @@ export class AIClient {
           onopen: () => {
             console.log('✅ Live Session Started')
             this.isSessionOpen = true
+            this.reconnectAttempts = 0
+            this.reconnectHistorySuggestionSent = false
+            this._clearReconnectTimer()
 
             if (this.isReconnecting) {
               onSystemMessage?.('Reconnected', 'Restored connection & context', 'success')
@@ -287,15 +299,9 @@ export class AIClient {
 
             const reason = e.reason || 'Connection lost'
 
-            console.log(`🔄 Connection dropped unexpectedly (${reason}). Re-establishing in 2s...`)
-            onSystemMessage?.('Reconnecting', 'Connection lost. Retrying...', 'warning')
+            console.log(`Connection dropped unexpectedly (${reason}).`)
 
-            this.isReconnecting = true
-
-            // Wait 2 seconds before reconnecting to prevent rapid loop crashing
-            setTimeout(() => {
-              this._establishConnection()
-            }, 2000)
+            this._scheduleReconnect(onSystemMessage, reason)
           },
           onerror: (e) => {
             console.error('🔥 Live Error:', e)
@@ -307,58 +313,14 @@ export class AIClient {
       console.error('Failed to connect live session:', err)
 
       if (!this.isDisconnecting) {
-        console.log('🔄 Initial connection failed. Retrying in 3s...')
-        onSystemMessage?.('Connection Error', 'Retrying connection...', 'warning')
-        setTimeout(() => {
-          this._establishConnection()
-        }, 3000)
+        this._scheduleReconnect(onSystemMessage, err?.message || 'connection failed')
       } else {
         onSystemMessage?.('Connection Error', 'Failed to connect. Check API Key.', 'error')
       }
       return
     }
 
-    // FORCE TRIGGER: Ensure activeSession is set before poking
-    // If we have a pending question (initialMessage or recovered history), the prompt handles it.
-    // If not, we still send a noise trigger to wake up the audio stream.
-    if (pendingUserQuestion && pendingUserQuestion.trim().length > 0) {
-      // If we have a pending text question, we might want to 'kick' the model
-      // However, since we put it in systemInstruction, the model *should* speak immediately on connect.
-      // We add a small delay and trigger just in case the system instruction isn't picked up instantly as a turn.
-      setTimeout(() => {
-        this._triggerModelResponse()
-      }, 500)
-    }
-  }
-
-  // Sends a synthetic "noise + silence" pattern to trigger the VAD
-  _triggerModelResponse() {
-    console.log('🚀 Triggering VAD with synthetic noise...')
-
-    // 1. Noise Burst (Trick VAD into "Speech Start")
-    const noiseLength = 3200
-    const noiseBuf = new Int16Array(noiseLength)
-    for (let i = 0; i < noiseLength; i++) {
-      noiseBuf[i] = (Math.random() - 0.5) * 200
-    }
-    this._sendToGemini(this._arrayBufferToBase64(noiseBuf.buffer))
-
-    // 2. Silence (Trick VAD into "Speech End")
-    setTimeout(() => {
-      const silenceLength = 8000
-      const silenceBuf = new Int16Array(silenceLength) // Zeros
-      this._sendToGemini(this._arrayBufferToBase64(silenceBuf.buffer))
-    }, 200)
-  }
-
-  _arrayBufferToBase64(buffer) {
-    let binary = ''
-    const bytes = new Uint8Array(buffer)
-    const len = bytes.byteLength
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i])
-    }
-    return btoa(binary)
+    // Pending user text is already injected into the system instruction.
   }
 
   // Safe sendText that restarts the session to force a response
@@ -407,6 +369,57 @@ export class AIClient {
     } else {
       console.error('AIClient: Cannot restart session, no connection args.')
     }
+  }
+
+  _clearReconnectTimer() {
+    if (!this.reconnectTimer) return
+    clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+  }
+
+  _scheduleReconnect(onSystemMessage, reason = 'Connection lost') {
+    if (this.isDisconnecting) return
+    if (this.reconnectTimer) return
+
+    this.isReconnecting = true
+    this.reconnectAttempts += 1
+
+    if (this.reconnectAttempts > this.maxReconnectAttempts) {
+      onSystemMessage?.(
+        'Connection Failed',
+        'Reconnect limit reached. Clear chat history and reconnect manually.',
+        'error',
+      )
+      this.disconnect('Reconnect limit reached')
+      return
+    }
+
+    const attempt = this.reconnectAttempts
+    const delayMs = Math.min(
+      this.reconnectMaxDelayMs,
+      this.reconnectBaseDelayMs * 2 ** Math.max(0, attempt - 1),
+    )
+    const delaySeconds = Math.ceil(delayMs / 1000)
+
+    onSystemMessage?.(
+      'Reconnecting',
+      `Connection unstable (${reason}). Retry ${attempt}/${this.maxReconnectAttempts} in ${delaySeconds}s.`,
+      'warning',
+    )
+
+    if (attempt >= 4 && !this.reconnectHistorySuggestionSent) {
+      this.reconnectHistorySuggestionSent = true
+      onSystemMessage?.(
+        'History Cleanup Recommended',
+        'Too many reconnects. Open Chat > Clear to remove old history, then reconnect.',
+        'warning',
+      )
+    }
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this._establishConnection()
+    }, delayMs)
   }
 
   _flushTranscriptions(isFinal, onTranscription, target = 'both') {
@@ -634,8 +647,13 @@ export class AIClient {
   }
 
   disconnect(reason = 'User disconnected') {
-    if ((!this.activeSession && !this.isRecording) || this.isDisconnecting) return
+    if (this.isDisconnecting) return
+    if (!this.activeSession && !this.isRecording && !this.reconnectTimer && !this.onDisconnectCallback)
+      return
     this.isDisconnecting = true
+    this._clearReconnectTimer()
+    this.isReconnecting = false
+    this.reconnectAttempts = 0
     console.log(`🔌 Disconnecting: ${reason}`)
 
     this.isSessionOpen = false

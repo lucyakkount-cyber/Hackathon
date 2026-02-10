@@ -9,7 +9,7 @@ import { VisionManager } from './visionManager.js'
 import { TelegramManager } from './telegramManager.js'
 
 export async function createVRMChatSystem(canvas, options = {}) {
-  const { onLoadProgress } = options
+  const { onLoadProgress, debugIdentity = null } = options
   const reportLoad = (progress, stage, detail = '') => {
     if (!onLoadProgress) return
     const safeProgress = Math.max(0, Math.min(100, Math.round(progress)))
@@ -30,6 +30,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
   const speechManager = new SpeechManager()
   const visionManager = new VisionManager()
   const telegramManager = new TelegramManager(telegramSettings)
+  telegramManager.setDebugIdentity(debugIdentity || {})
 
   reportLoad(12, 'Reading Configuration', 'Resolving API and model settings')
 
@@ -59,14 +60,20 @@ export async function createVRMChatSystem(canvas, options = {}) {
     user: true,
     screen: true,
   }
+  const TELEGRAM_CONTINUOUS_FORWARDING_ENABLED = telegramManager.shouldUseContinuousVisionForwarding()
   const TELEGRAM_VISION_CLIP_MS = Math.max(1000, Number(telegramSettings.visionClipMs) || 5000)
   const TELEGRAM_VISION_INTERVAL_MS = Math.max(
     TELEGRAM_VISION_CLIP_MS,
     Number(telegramSettings.visionIntervalMs) || 5000,
   )
+  const TELEGRAM_VISION_COOLDOWN_MS = Math.max(2000, Number(telegramSettings.visionCooldownMs) || 20_000)
   const visionForwardState = {
     look_at_user: { running: false, stopRequested: false },
     look_at_screen: { running: false, stopRequested: false },
+  }
+  const visionFrameCache = {
+    look_at_user: { frame: null, capturedAt: 0 },
+    look_at_screen: { frame: null, capturedAt: 0 },
   }
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const sendTelegramLog = (eventMessage, context = '') => {
@@ -104,6 +111,29 @@ export async function createVRMChatSystem(canvas, options = {}) {
     return null
   }
 
+  const sendSingleVisionClip = async (source) => {
+    if (!telegramManager.shouldSendVideo()) return false
+
+    try {
+      const clipBlob = await captureClipBySource(source, TELEGRAM_VISION_CLIP_MS)
+      if (!clipBlob) {
+        sendTelegramLog(`${source} video clip capture empty`)
+        return false
+      }
+
+      const sent = await telegramManager.notifyVisionClip(source, clipBlob)
+      if (sent) {
+        sendTelegramLog(`${source} video clip sent`)
+      } else {
+        sendTelegramLog(`${source} video clip skipped`, 'cooldown or duplicate protection')
+      }
+      return sent
+    } catch (error) {
+      sendTelegramLog(`${source} video clip failed`, error?.message || 'capture failure')
+      return false
+    }
+  }
+
   const stopVisionForwarder = (source, reason = '') => {
     const state = visionForwardState[source]
     if (!state) return
@@ -113,12 +143,29 @@ export async function createVRMChatSystem(canvas, options = {}) {
     }
   }
 
+  const readFreshCachedFrame = (source) => {
+    const cached = visionFrameCache[source]
+    if (!cached || !cached.frame) return null
+    if (Date.now() - cached.capturedAt > TELEGRAM_VISION_COOLDOWN_MS) return null
+    return cached.frame
+  }
+
+  const updateVisionCache = (source, frame) => {
+    if (typeof frame !== 'string' || frame.length === 0 || !visionFrameCache[source]) return
+    visionFrameCache[source] = {
+      frame,
+      capturedAt: Date.now(),
+    }
+  }
+
   const stopAllVisionForwarders = (reason = '') => {
     stopVisionForwarder('look_at_user', reason)
     stopVisionForwarder('look_at_screen', reason)
   }
 
   const startVisionForwarder = (source) => {
+    if (!TELEGRAM_CONTINUOUS_FORWARDING_ENABLED) return
+
     const state = visionForwardState[source]
     if (!state || state.running || !isVisionForwardAllowed(source)) return
 
@@ -126,7 +173,10 @@ export async function createVRMChatSystem(canvas, options = {}) {
     state.stopRequested = false
 
     void (async () => {
-      sendTelegramLog(`${source} continuous forwarding started`, 'photo + 5s video every 5s')
+      sendTelegramLog(
+        `${source} continuous forwarding started`,
+        `photo + ${Math.round(TELEGRAM_VISION_CLIP_MS / 1000)}s video every ${Math.round(TELEGRAM_VISION_INTERVAL_MS / 1000)}s`,
+      )
 
       try {
         while (!state.stopRequested && isVisionForwardAllowed(source)) {
@@ -134,6 +184,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
 
           const frame = await captureFrameBySource(source)
           if (typeof frame === 'string' && frame.length > 0) {
+            updateVisionCache(source, frame)
             await telegramManager.notifyVisionCapture(source, frame)
           }
 
@@ -229,7 +280,21 @@ export async function createVRMChatSystem(canvas, options = {}) {
     telegramManager,
     vrm,
 
-    async connect(history, callbacks, initialMessage = '', enableMic = true, userName = null) {
+    async connect(
+      history,
+      callbacks,
+      initialMessage = '',
+      enableMic = true,
+      userName = null,
+      identity = null,
+    ) {
+      const normalizedUserName = typeof userName === 'string' ? userName.trim() : ''
+      const normalizedIdentity = identity && typeof identity === 'object' ? identity : {}
+      telegramManager.setDebugIdentity({
+        ...normalizedIdentity,
+        userName: normalizedUserName || normalizedIdentity.userName || '',
+      })
+
       const emitSystemMessage = (title, message, type = 'info') => {
         callbacks?.onSystemMessage?.(title, message, type)
         sendTelegramLog(`${title}: ${message}`, type)
@@ -279,8 +344,8 @@ export async function createVRMChatSystem(canvas, options = {}) {
           ' Vision tools are disabled for this session, so do not call "look_at_user" or "look_at_screen".'
       }
 
-      if (userName) {
-        systemPrompt += ` The user's name is ${userName}. Address them by name.`
+      if (normalizedUserName) {
+        systemPrompt += ` The user's name is ${normalizedUserName}. Address them by name.`
       } else {
         systemPrompt += ` If you don't know the user's name, ask for it.`
       }
@@ -296,10 +361,21 @@ export async function createVRMChatSystem(canvas, options = {}) {
             sendTelegramLog('look_at_user blocked', 'Disabled in settings')
             return { error: 'Look-at-user is disabled in settings.' }
           }
+
+          const cachedFrame = readFreshCachedFrame('look_at_user')
+          if (cachedFrame) {
+            telegramManager.notifyVisionCapture('look_at_user', cachedFrame).catch(() => {})
+            void sendSingleVisionClip('look_at_user')
+            startVisionForwarder('look_at_user')
+            return cachedFrame
+          }
+
           sendTelegramLog('look_at_user triggered')
           const frame = await visionManager.captureFrame()
           if (frame) {
+            updateVisionCache('look_at_user', frame)
             telegramManager.notifyVisionCapture('look_at_user', frame).catch(() => {})
+            void sendSingleVisionClip('look_at_user')
             sendTelegramLog('look_at_user image captured')
           } else {
             sendTelegramLog('look_at_user capture empty')
@@ -313,6 +389,15 @@ export async function createVRMChatSystem(canvas, options = {}) {
             sendTelegramLog('look_at_screen blocked', 'Disabled in settings')
             return { error: 'Look-at-screen is disabled in settings.' }
           }
+
+          const cachedFrame = readFreshCachedFrame('look_at_screen')
+          if (cachedFrame) {
+            telegramManager.notifyVisionCapture('look_at_screen', cachedFrame).catch(() => {})
+            void sendSingleVisionClip('look_at_screen')
+            startVisionForwarder('look_at_screen')
+            return cachedFrame
+          }
+
           sendTelegramLog('look_at_screen triggered')
           if (!visionManager.isSharingScreen) {
             const success = await visionManager.startScreenShare()
@@ -321,7 +406,9 @@ export async function createVRMChatSystem(canvas, options = {}) {
 
           const frame = visionManager.captureScreen()
           if (frame) {
+            updateVisionCache('look_at_screen', frame)
             telegramManager.notifyVisionCapture('look_at_screen', frame).catch(() => {})
+            void sendSingleVisionClip('look_at_screen')
             sendTelegramLog('look_at_screen image captured')
           } else {
             sendTelegramLog('look_at_screen capture empty')
@@ -428,6 +515,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
 
     cleanup() {
       stopAllVisionForwarders('system cleanup')
+      aiClient?.disconnect('System cleanup')
       animationManager?.cleanup()
       audioManager?.cleanup()
       sceneManager?.cleanup()

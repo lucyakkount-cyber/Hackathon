@@ -162,10 +162,101 @@ const avatarScale = ref(parseFloat(localStorage.getItem('vrm_avatar_scale') || '
 const lookAtUserEnabled = ref(localStorage.getItem('vrm_look_at_user') !== 'false')
 const lookAtScreenEnabled = ref(localStorage.getItem('vrm_look_at_screen') !== 'false')
 const chatHistory = ref([])
+const MAX_CHAT_HISTORY_ITEMS = 120
+const DEBUG_USER_ID_STORAGE_KEY = 'vrm_debug_user_id'
+const ASSISTANT_ACTOR_ID = 'assistant-riko'
+
+const createDebugId = (prefix = 'id') => {
+  const uuid = globalThis?.crypto?.randomUUID?.()
+  const randomPart = uuid
+    ? uuid.replace(/-/g, '').slice(0, 12)
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+  return `${prefix}-${randomPart}`
+}
+
+const getOrCreatePersistentId = (storageKey, prefix) => {
+  const existing = localStorage.getItem(storageKey)
+  if (existing && existing.trim().length > 0) {
+    return existing.trim()
+  }
+  const created = createDebugId(prefix)
+  localStorage.setItem(storageKey, created)
+  return created
+}
+
+const userDebugId = ref(getOrCreatePersistentId(DEBUG_USER_ID_STORAGE_KEY, 'usr'))
+const sessionDebugId = ref(createDebugId('sess'))
+
+const stripControlCharacters = (value) => {
+  let output = ''
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127)) {
+      output += value[i]
+    }
+  }
+  return output
+}
+
+const sanitizeTranscriptText = (value) => {
+  if (typeof value !== 'string') return ''
+  return stripControlCharacters(value)
+    .replace(/<ctrl\d+>/gi, '')
+    .replace(/<[^>]*ctrl[^>]*>/gi, '')
+    .replace(/<noise>/gi, '')
+    .replace(/<silence>/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const trimHistory = (items) => {
+  if (!Array.isArray(items)) return []
+  return items.slice(-MAX_CHAT_HISTORY_ITEMS)
+}
+
+const createHistoryEntry = (role, text, overrides = {}) => {
+  const normalizedRole = role === 'user' ? 'user' : 'model'
+  return {
+    id: typeof overrides.id === 'string' && overrides.id ? overrides.id : createDebugId('msg'),
+    role: normalizedRole,
+    text,
+    timestamp: Number.isFinite(Number(overrides.timestamp))
+      ? Number(overrides.timestamp)
+      : Date.now(),
+    actorId:
+      typeof overrides.actorId === 'string' && overrides.actorId
+        ? overrides.actorId
+        : normalizedRole === 'user'
+          ? userDebugId.value
+          : ASSISTANT_ACTOR_ID,
+    userId:
+      typeof overrides.userId === 'string' && overrides.userId
+        ? overrides.userId
+        : userDebugId.value,
+    sessionId:
+      typeof overrides.sessionId === 'string' && overrides.sessionId
+        ? overrides.sessionId
+        : sessionDebugId.value,
+  }
+}
+
+const normalizeStoredHistory = (items) => {
+  if (!Array.isArray(items)) return []
+  const normalized = []
+  for (const rawItem of items) {
+    const role = rawItem?.role === 'user' ? 'user' : 'model'
+    const text = sanitizeTranscriptText(rawItem?.text || '')
+    if (!text) continue
+    normalized.push(createHistoryEntry(role, text, rawItem || {}))
+  }
+  return trimHistory(normalized)
+}
 
 try {
   const saved = localStorage.getItem('vrm_chat_history')
-  if (saved) chatHistory.value = JSON.parse(saved)
+  if (saved) {
+    chatHistory.value = normalizeStoredHistory(JSON.parse(saved))
+  }
 } catch {
   chatHistory.value = []
 }
@@ -208,7 +299,12 @@ watch(lookAtScreenEnabled, (value) => {
 watch(
   chatHistory,
   (val) => {
-    localStorage.setItem('vrm_chat_history', JSON.stringify(val))
+    const trimmed = trimHistory(val)
+    if (trimmed.length !== val.length) {
+      chatHistory.value = trimmed
+      return
+    }
+    localStorage.setItem('vrm_chat_history', JSON.stringify(trimmed))
   },
   { deep: true },
 )
@@ -233,8 +329,14 @@ onMounted(async () => {
   updateLoadingState({ progress: 8, stage: 'Booting Engine', detail: 'Initializing client' })
 
   try {
+    const initialUserName = (localStorage.getItem('vrm_user_name') || '').trim()
     const sys = await createVRMChatSystem(canvasRef.value, {
       onLoadProgress: updateLoadingState,
+      debugIdentity: {
+        userId: userDebugId.value,
+        sessionId: sessionDebugId.value,
+        userName: initialUserName,
+      },
     })
 
     system.value = sys
@@ -319,7 +421,14 @@ const toggleConnection = async () => {
     await system.value.connect(
       chatHistory.value,
       {
-        onUserNameSet: (name) => localStorage.setItem('vrm_user_name', name),
+        onUserNameSet: (name) => {
+          localStorage.setItem('vrm_user_name', name)
+          system.value?.telegramManager?.setDebugIdentity({
+            userName: name,
+            userId: userDebugId.value,
+            sessionId: sessionDebugId.value,
+          })
+        },
         onMemorySaved: (key, value) => {
           const memories = JSON.parse(localStorage.getItem('vrm_user_memories') || '{}')
           memories[key] = value
@@ -336,33 +445,67 @@ const toggleConnection = async () => {
           showToast('Call Ended', reason, 'info')
         },
         onTranscription: (role, text, isFinal) => {
+          const normalizedRole = role === 'user' ? 'user' : 'model'
+          const normalizedText = sanitizeTranscriptText(text)
+          if (!normalizedText) return
+
           const newHistory = [...chatHistory.value]
           const lastMsg = newHistory[newHistory.length - 1]
 
-          if (!isFinal && lastMsg && lastMsg.role === role) {
-            lastMsg.text = text
+          if (!isFinal && lastMsg && lastMsg.role === normalizedRole) {
+            lastMsg.text = normalizedText
             lastMsg.timestamp = Date.now()
+            if (!lastMsg.id) lastMsg.id = createDebugId('msg')
+            if (!lastMsg.actorId) {
+              lastMsg.actorId =
+                normalizedRole === 'user' ? userDebugId.value : ASSISTANT_ACTOR_ID
+            }
+            if (!lastMsg.userId) lastMsg.userId = userDebugId.value
+            if (!lastMsg.sessionId) lastMsg.sessionId = sessionDebugId.value
             chatHistory.value = newHistory
             return
           }
 
           if (isFinal) {
-            if (lastMsg && lastMsg.role === role && text.startsWith(lastMsg.text.substring(0, 10))) {
-              lastMsg.text = text
+            if (
+              lastMsg &&
+              lastMsg.role === normalizedRole &&
+              normalizedText.startsWith(lastMsg.text.substring(0, 10))
+            ) {
+              lastMsg.text = normalizedText
+              lastMsg.timestamp = Date.now()
+              if (!lastMsg.id) lastMsg.id = createDebugId('msg')
+              if (!lastMsg.actorId) {
+                lastMsg.actorId =
+                  normalizedRole === 'user' ? userDebugId.value : ASSISTANT_ACTOR_ID
+              }
+              if (!lastMsg.userId) lastMsg.userId = userDebugId.value
+              if (!lastMsg.sessionId) lastMsg.sessionId = sessionDebugId.value
               chatHistory.value = newHistory
               return
             }
 
-            chatHistory.value = [...newHistory, { role, text, timestamp: Date.now() }]
+            chatHistory.value = trimHistory([
+              ...newHistory,
+              createHistoryEntry(normalizedRole, normalizedText),
+            ])
             return
           }
 
-          chatHistory.value = [...newHistory, { role, text, timestamp: Date.now() }]
+          chatHistory.value = trimHistory([
+            ...newHistory,
+            createHistoryEntry(normalizedRole, normalizedText),
+          ])
         },
       },
       '',
       true,
       localStorage.getItem('vrm_user_name'),
+      {
+        userId: userDebugId.value,
+        sessionId: sessionDebugId.value,
+        userName: (localStorage.getItem('vrm_user_name') || '').trim(),
+      },
     )
 
     isConnected.value = true
