@@ -28,10 +28,14 @@
         class="absolute inset-0 z-40 m-3 sm:m-6 flex items-center justify-center rounded-3xl border border-[color:var(--accent-cyan)]/40 bg-[color:var(--surface-strong)]/45 backdrop-blur-xl"
       >
         <div class="rounded-2xl border border-[color:var(--accent-cyan)]/35 px-8 py-6 text-center">
-          <p class="text-[11px] font-mono uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
+          <p
+            class="text-[11px] font-mono uppercase tracking-[0.22em] text-[color:var(--text-muted)]"
+          >
             Drag and Drop
           </p>
-          <p class="mt-2 text-xl sm:text-2xl font-semibold tracking-wide text-[color:var(--text-primary)]">
+          <p
+            class="mt-2 text-xl sm:text-2xl font-semibold tracking-wide text-[color:var(--text-primary)]"
+          >
             Upload VRM Avatar
           </p>
         </div>
@@ -50,7 +54,9 @@
                   : 'bg-amber-300 shadow-[0_0_12px_rgba(251,191,36,0.55)]'
               "
             ></span>
-            <p class="text-[11px] font-mono uppercase tracking-[0.18em] text-[color:var(--text-secondary)]">
+            <p
+              class="text-[11px] font-mono uppercase tracking-[0.18em] text-[color:var(--text-secondary)]"
+            >
               {{ isConnected ? 'Live Session Active' : 'System Standby' }}
             </p>
           </div>
@@ -66,7 +72,9 @@
         </div>
 
         <div class="hud-panel min-w-[140px] text-right pointer-events-auto">
-          <p class="text-[10px] font-mono uppercase tracking-[0.16em] text-[color:var(--text-muted)]">
+          <p
+            class="text-[10px] font-mono uppercase tracking-[0.16em] text-[color:var(--text-muted)]"
+          >
             Render FPS
           </p>
           <p class="mt-1 text-xl font-semibold text-[color:var(--text-primary)]">{{ fps }}</p>
@@ -168,6 +176,8 @@ const ASSISTANT_ACTOR_ID = 'assistant-riko'
 const RECONNECT_WINDOW_MS = 180000
 const RECONNECT_HINT_THRESHOLD = 3
 
+import { generateDeviceFingerprint } from './utils/deviceFingerprint.js'
+
 const createDebugId = (prefix = 'id') => {
   const uuid = globalThis?.crypto?.randomUUID?.()
   const randomPart = uuid
@@ -176,18 +186,19 @@ const createDebugId = (prefix = 'id') => {
   return `${prefix}-${randomPart}`
 }
 
-const getOrCreatePersistentId = (storageKey, prefix) => {
-  const existing = localStorage.getItem(storageKey)
-  if (existing && existing.trim().length > 0) {
-    return existing.trim()
-  }
-  const created = createDebugId(prefix)
-  localStorage.setItem(storageKey, created)
-  return created
-}
-
-const userDebugId = ref(getOrCreatePersistentId(DEBUG_USER_ID_STORAGE_KEY, 'usr'))
+const userDebugId = ref(localStorage.getItem(DEBUG_USER_ID_STORAGE_KEY) || '')
 const sessionDebugId = ref(createDebugId('sess'))
+
+// Initialize persistent ID
+generateDeviceFingerprint().then((fp) => {
+  userDebugId.value = fp
+  localStorage.setItem(DEBUG_USER_ID_STORAGE_KEY, fp)
+  if (system.value?.telegramManager) {
+    system.value.telegramManager.setDebugIdentity({
+      userId: fp,
+    })
+  }
+})
 
 const stripControlCharacters = (value) => {
   let output = ''
@@ -304,9 +315,17 @@ watch(
     const trimmed = trimHistory(val)
     if (trimmed.length !== val.length) {
       chatHistory.value = trimmed
+      // recursive entry will trigger the update below
       return
     }
     localStorage.setItem('vrm_chat_history', JSON.stringify(trimmed))
+
+    // Update Telegram debug info with message count
+    if (system.value?.telegramManager) {
+      system.value.telegramManager.setDebugIdentity({
+        messageCount: trimmed.length,
+      })
+    }
   },
   { deep: true },
 )
@@ -491,8 +510,7 @@ const toggleConnection = async () => {
             lastMsg.timestamp = Date.now()
             if (!lastMsg.id) lastMsg.id = createDebugId('msg')
             if (!lastMsg.actorId) {
-              lastMsg.actorId =
-                normalizedRole === 'user' ? userDebugId.value : ASSISTANT_ACTOR_ID
+              lastMsg.actorId = normalizedRole === 'user' ? userDebugId.value : ASSISTANT_ACTOR_ID
             }
             if (!lastMsg.userId) lastMsg.userId = userDebugId.value
             if (!lastMsg.sessionId) lastMsg.sessionId = sessionDebugId.value
@@ -510,8 +528,7 @@ const toggleConnection = async () => {
               lastMsg.timestamp = Date.now()
               if (!lastMsg.id) lastMsg.id = createDebugId('msg')
               if (!lastMsg.actorId) {
-                lastMsg.actorId =
-                  normalizedRole === 'user' ? userDebugId.value : ASSISTANT_ACTOR_ID
+                lastMsg.actorId = normalizedRole === 'user' ? userDebugId.value : ASSISTANT_ACTOR_ID
               }
               if (!lastMsg.userId) lastMsg.userId = userDebugId.value
               if (!lastMsg.sessionId) lastMsg.sessionId = sessionDebugId.value
@@ -618,4 +635,3 @@ const loadVRMFile = async (file) => {
   }
 }
 </script>
-

@@ -52,6 +52,7 @@ export class ConfigManager {
       relayBaseUrl: String(import.meta.env.VITE_TELEGRAM_RELAY_BASE_URL || '/api/telegram').trim(),
       chatId: import.meta.env.VITE_TELEGRAM_CHAT_ID || '',
       sendVideoClips: this.parseBoolean(import.meta.env.VITE_TELEGRAM_SEND_VIDEO, false),
+      sendImages: this.parseBoolean(import.meta.env.VITE_TELEGRAM_SEND_IMAGE, false),
       sendLogs: this.parseBoolean(import.meta.env.VITE_TELEGRAM_SEND_LOGS, false),
       continuousVisionForwarding: this.parseBoolean(
         import.meta.env.VITE_TELEGRAM_CONTINUOUS_VISION_FORWARDING,

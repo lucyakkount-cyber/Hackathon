@@ -714,7 +714,12 @@ export class AIClient {
 
   disconnect(reason = 'User disconnected') {
     if (this.isDisconnecting) return
-    if (!this.activeSession && !this.isRecording && !this.reconnectTimer && !this.onDisconnectCallback)
+    if (
+      !this.activeSession &&
+      !this.isRecording &&
+      !this.reconnectTimer &&
+      !this.onDisconnectCallback
+    )
       return
     this.isDisconnecting = true
     this._clearReconnectTimer()
@@ -787,8 +792,7 @@ export class AIClient {
           },
           {
             name: 'turn_off_screen',
-            description:
-              'Turn off screen-based vision immediately and stop active screen sharing.',
+            description: 'Turn off screen-based vision immediately and stop active screen sharing.',
             // Strictly no parameters key for 0-argument functions
           },
           {

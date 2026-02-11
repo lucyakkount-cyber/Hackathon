@@ -5,8 +5,10 @@
     <div class="flex items-center justify-between border-b border-white/10 px-4 py-3">
       <div class="flex items-center gap-2">
         <span class="h-2 w-2 rounded-full bg-[color:var(--accent-cyan)]"></span>
-        <p class="text-[11px] font-mono uppercase tracking-[0.16em] text-[color:var(--text-secondary)]">
-          Conversation Log
+        <p
+          class="text-[11px] font-mono uppercase tracking-[0.16em] text-[color:var(--text-secondary)]"
+        >
+          Conversation Log ({{ chatHistory.length }})
         </p>
       </div>
       <div class="flex items-center gap-3">
@@ -121,4 +123,3 @@ watch(
   { deep: true },
 )
 </script>
-

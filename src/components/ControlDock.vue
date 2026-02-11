@@ -1,6 +1,10 @@
 ﻿<template>
-  <div class="pointer-events-none absolute bottom-4 left-1/2 z-30 w-[min(680px,calc(100%-1.5rem))] -translate-x-1/2 sm:bottom-7">
-    <div class="dock-shell pointer-events-auto mx-auto flex items-center justify-between gap-2 rounded-[1.4rem] px-2 py-2 sm:gap-3 sm:px-3">
+  <div
+    class="pointer-events-none absolute bottom-4 left-1/2 z-30 w-[min(680px,calc(100%-1.5rem))] -translate-x-1/2 sm:bottom-7"
+  >
+    <div
+      class="dock-shell pointer-events-auto mx-auto flex items-center justify-between gap-2 rounded-[1.4rem] px-2 py-2 sm:gap-3 sm:px-3"
+    >
       <input
         ref="fileInputRef"
         type="file"
@@ -109,4 +113,3 @@ const handleFileUpload = (event) => {
   event.target.value = ''
 }
 </script>
-

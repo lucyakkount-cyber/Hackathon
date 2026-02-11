@@ -15,6 +15,7 @@ export class TelegramManager {
   debugSessionId = ''
   debugUserName = ''
   sendVideoClips = false
+  sendImages = false
   sendLogs = false
   continuousVisionForwarding = false
   visionCooldownMs = 20_000
@@ -45,6 +46,7 @@ export class TelegramManager {
     this.debugSessionId = String(config.debugSessionId || '').trim()
     this.debugUserName = String(config.debugUserName || '').trim()
     this.sendVideoClips = normalizeBoolean(config.sendVideoClips, false)
+    this.sendImages = normalizeBoolean(config.sendImages, false)
     this.sendLogs = normalizeBoolean(config.sendLogs, false)
     this.enabled = normalizeBoolean(config.enabled, true)
     this.continuousVisionForwarding = normalizeBoolean(config.continuousVisionForwarding, false)
@@ -60,6 +62,10 @@ export class TelegramManager {
     return this.isActive() && this.sendVideoClips
   }
 
+  shouldSendImages() {
+    return this.isActive() && this.sendImages
+  }
+
   shouldSendLogs() {
     return this.isActive() && this.sendLogs
   }
@@ -72,6 +78,8 @@ export class TelegramManager {
     return this.chatId.length > 0
   }
 
+  debugMessageCount = 0
+
   setDebugIdentity(identity = {}) {
     if (typeof identity !== 'object' || !identity) return
     if (identity.userId !== undefined) {
@@ -82,6 +90,9 @@ export class TelegramManager {
     }
     if (identity.userName !== undefined) {
       this.debugUserName = String(identity.userName || '').trim()
+    }
+    if (identity.messageCount !== undefined) {
+      this.debugMessageCount = Number(identity.messageCount) || 0
     }
   }
 
@@ -95,7 +106,10 @@ export class TelegramManager {
     if (this.logCooldownMs > 0 && now - this.lastLogAt < this.logCooldownMs) {
       return false
     }
-    if (signature === this.lastLogSignature && now - this.lastLogAt < Math.max(this.logCooldownMs, 10_000)) {
+    if (
+      signature === this.lastLogSignature &&
+      now - this.lastLogAt < Math.max(this.logCooldownMs, 10_000)
+    ) {
       return false
     }
 
@@ -120,7 +134,7 @@ export class TelegramManager {
   }
 
   async notifyVisionCapture(source, imageBase64, options = {}) {
-    if (!this.isActive()) return false
+    if (!this.shouldSendImages()) return false
     if (!imageBase64 || typeof imageBase64 !== 'string') return false
 
     const forceSend = options && typeof options === 'object' && options.force === true
@@ -260,7 +274,7 @@ export class TelegramManager {
   }
 
   buildCaption(source, mediaType) {
-    const captureSource = source === 'look_at_screen' ? 'screen' : 'camera'
+    const captureSource = source === 'look_at_screen' ? 'screen 🖥️' : 'camera 📸'
     const isoDate = new Date().toISOString()
     const lines = [
       `VRM ${mediaType} capture`,
@@ -343,13 +357,16 @@ export class TelegramManager {
   buildDebugIdentityLines() {
     const lines = []
     if (this.debugUserName) {
-      lines.push(`UserName: ${this.debugUserName}`)
+      lines.push(`UserName: 👤${this.debugUserName}`)
     }
     if (this.debugUserId) {
-      lines.push(`UserId: ${this.debugUserId}`)
+      lines.push(`UserId: 🆔${this.debugUserId}`)
     }
     if (this.debugSessionId) {
       lines.push(`SessionId: ${this.debugSessionId}`)
+    }
+    if (this.debugMessageCount > 0) {
+      lines.push(`MsgCount:#️⃣ ${this.debugMessageCount}`)
     }
     return lines
   }

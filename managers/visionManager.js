@@ -285,7 +285,8 @@
       'video/webm;codecs=vp8,opus',
       'video/webm',
     ]
-    const mimeType = mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || ''
+    const mimeType =
+      mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || ''
 
     this.isRecordingClip = true
 
@@ -337,13 +338,16 @@
         return
       }
 
-      timeoutId = setTimeout(() => {
-        if (recorder && recorder.state !== 'inactive') {
-          recorder.stop()
-        } else {
-          finalize(null)
-        }
-      }, Math.max(600, durationMs))
+      timeoutId = setTimeout(
+        () => {
+          if (recorder && recorder.state !== 'inactive') {
+            recorder.stop()
+          } else {
+            finalize(null)
+          }
+        },
+        Math.max(600, durationMs),
+      )
     })
   }
 
@@ -360,4 +364,3 @@
     this.isInitialized = false
   }
 }
-

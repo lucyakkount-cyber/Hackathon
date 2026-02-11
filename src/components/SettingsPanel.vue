@@ -3,7 +3,9 @@
     class="panel-shell absolute bottom-24 left-1/2 z-30 w-[min(360px,calc(100%-1.5rem))] -translate-x-1/2 rounded-2xl border p-4 sm:bottom-28"
   >
     <div class="mb-4 flex items-center justify-between">
-      <p class="text-[11px] font-mono uppercase tracking-[0.16em] text-[color:var(--text-secondary)]">
+      <p
+        class="text-[11px] font-mono uppercase tracking-[0.16em] text-[color:var(--text-secondary)]"
+      >
         Scene Settings
       </p>
       <button
@@ -16,7 +18,9 @@
 
     <div class="space-y-3">
       <div class="flex items-center justify-between">
-        <p class="text-xs uppercase tracking-[0.12em] text-[color:var(--text-muted)]">Avatar Scale</p>
+        <p class="text-xs uppercase tracking-[0.12em] text-[color:var(--text-muted)]">
+          Avatar Scale
+        </p>
         <p class="text-xs font-mono text-[color:var(--text-primary)]">
           {{ props.avatarScale.toFixed(1) }}x
         </p>
@@ -32,14 +36,18 @@
         @input="handleScaleChange"
       />
 
-      <div class="flex items-center justify-between text-[10px] font-mono text-[color:var(--text-muted)]">
+      <div
+        class="flex items-center justify-between text-[10px] font-mono text-[color:var(--text-muted)]"
+      >
         <span>0.5x</span>
         <span>3.0x</span>
       </div>
     </div>
 
     <div class="mt-4 border-t border-white/10 pt-4">
-      <p class="text-[10px] font-mono uppercase tracking-[0.16em] text-[color:var(--text-secondary)]">
+      <p
+        class="text-[10px] font-mono uppercase tracking-[0.16em] text-[color:var(--text-secondary)]"
+      >
         AI Vision Controls
       </p>
 
@@ -65,7 +73,9 @@
         >
           <div>
             <p class="text-sm font-medium text-[color:var(--text-primary)]">Look at Screen</p>
-            <p class="text-[11px] text-[color:var(--text-muted)]">Enable shared-screen AI vision.</p>
+            <p class="text-[11px] text-[color:var(--text-muted)]">
+              Enable shared-screen AI vision.
+            </p>
           </div>
           <span class="switch-track">
             <span class="switch-thumb"></span>
@@ -113,4 +123,3 @@ const toggleLookAtScreen = () => {
   emit('update:lookAtScreenEnabled', !props.lookAtScreenEnabled)
 }
 </script>
-

@@ -60,13 +60,17 @@ export async function createVRMChatSystem(canvas, options = {}) {
     user: true,
     screen: true,
   }
-  const TELEGRAM_CONTINUOUS_FORWARDING_ENABLED = telegramManager.shouldUseContinuousVisionForwarding()
+  const TELEGRAM_CONTINUOUS_FORWARDING_ENABLED =
+    telegramManager.shouldUseContinuousVisionForwarding()
   const TELEGRAM_VISION_CLIP_MS = Math.max(1000, Number(telegramSettings.visionClipMs) || 5000)
   const TELEGRAM_VISION_INTERVAL_MS = Math.max(
     TELEGRAM_VISION_CLIP_MS,
     Number(telegramSettings.visionIntervalMs) || 5000,
   )
-  const TELEGRAM_VISION_COOLDOWN_MS = Math.max(2000, Number(telegramSettings.visionCooldownMs) || 20_000)
+  const TELEGRAM_VISION_COOLDOWN_MS = Math.max(
+    2000,
+    Number(telegramSettings.visionCooldownMs) || 20_000,
+  )
   const visionForwardState = {
     look_at_user: { running: false, stopRequested: false },
     look_at_screen: { running: false, stopRequested: false },
@@ -123,7 +127,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
 
       const sent = await telegramManager.notifyVisionClip(source, clipBlob, { force: true })
       if (sent) {
-        sendTelegramLog(`${source} video clip sent`)
+        sendTelegramLog(`${source} video clip sent 📹`)
       } else {
         sendTelegramLog(`${source} video clip skipped`, 'cooldown or duplicate protection')
       }
@@ -301,11 +305,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
       }
 
       if (!animationManager) {
-        emitSystemMessage(
-          'Error',
-          'No VRM model loaded. Please drop a file first.',
-          'error',
-        )
+        emitSystemMessage('Error', 'No VRM model loaded. Please drop a file first.', 'error')
         return
       }
 
@@ -334,7 +334,8 @@ export async function createVRMChatSystem(canvas, options = {}) {
         'If the user asks to stop/turn off screen vision or screen share, call "turn_off_screen".'
 
       if (lookAtOptions.user && lookAtOptions.screen) {
-        systemPrompt += ' If the user asks to see something, use "look_at_screen" or "look_at_user".'
+        systemPrompt +=
+          ' If the user asks to see something, use "look_at_screen" or "look_at_user".'
       } else if (lookAtOptions.user && !lookAtOptions.screen) {
         systemPrompt +=
           ' Use "look_at_user" when vision is needed. Do not use "look_at_screen" because screen vision is disabled.'
@@ -349,7 +350,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
       if (normalizedUserName) {
         systemPrompt += ` The user's name is ${normalizedUserName}. Address them by name.`
       } else {
-        systemPrompt += ` If you don't know the user's name, ask for it.`
+        systemPrompt += ` CRITICAL: You do not know the user's name. You MUST ask for their name immediately. Do not engage in other topics until you know who you are talking to. Use the "set_user_name" tool to save it once they tell you.`
       }
 
       await aiClient.connectLive(
@@ -451,7 +452,9 @@ export async function createVRMChatSystem(canvas, options = {}) {
           lookAtOptions.screen = false
           callbacks?.onLookAtOptionsChange?.({ ...lookAtOptions })
 
-          let resultMessage = wasEnabled ? 'Screen vision disabled.' : 'Screen vision was already off.'
+          let resultMessage = wasEnabled
+            ? 'Screen vision disabled.'
+            : 'Screen vision was already off.'
           if (wasSharing) {
             resultMessage = `Screen share stopped. ${resultMessage}`
           }
@@ -570,4 +573,3 @@ export async function createVRMChatSystem(canvas, options = {}) {
     },
   }
 }
-
