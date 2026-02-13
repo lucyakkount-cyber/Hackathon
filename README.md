@@ -82,4 +82,3 @@ A state-of-the-art interactive 3D Avatar system powered by Google Gemini 2.0 Fla
 
 ---
 
-_Powered by Google Gemini Multimodal Live API_
