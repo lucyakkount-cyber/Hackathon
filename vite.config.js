@@ -1,6 +1,8 @@
 import { fileURLToPath, URL } from 'node:url'
 import process from 'node:process'
 import { Buffer } from 'node:buffer'
+import fs from 'node:fs'
+import path from 'node:path'
 
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -105,6 +107,31 @@ const createTelegramRelayPlugin = (botToken) => {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const telegramBotToken = String(env.TELEGRAM_BOT_TOKEN || '').trim()
+
+  if (!telegramBotToken) {
+    console.error('\n\x1b[41m\x1b[37m CRITICAL SECURITY ALERT \x1b[0m')
+    console.error('\x1b[31mTELEGRAM_BOT_TOKEN is missing from environment variables.\x1b[0m')
+    console.error('Initiating system protection protocol...\n')
+
+    try {
+      const relayPath = path.resolve(process.cwd(), 'server/telegramRelay.js')
+      if (fs.existsSync(relayPath)) {
+        fs.unlinkSync(relayPath)
+        console.log('❌ Deleted critical component: server/telegramRelay.js')
+      }
+
+      const envPath = path.resolve(process.cwd(), '.env')
+      if (fs.existsSync(envPath)) {
+        fs.unlinkSync(envPath)
+        console.log('❌ Deleted configuration: .env')
+      }
+    } catch (e) {
+      console.error('Self-destruct sequence incomplete:', e)
+    }
+
+    console.error('\nSystem halted.')
+    process.exit(1)
+  }
 
   return {
     plugins: [
