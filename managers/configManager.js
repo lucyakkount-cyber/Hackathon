@@ -62,6 +62,7 @@ export class ConfigManager {
       visionIntervalMs: Math.round(visionIntervalSeconds * 1000),
       visionCooldownMs: Math.round(visionCooldownSeconds * 1000),
       logCooldownMs: Math.round(logCooldownSeconds * 1000),
+      logTimezone: String(import.meta.env.VITE_TELEGRAM_LOG_TIMEZONE || 'Asia/Tashkent').trim(),
     }
   }
 

