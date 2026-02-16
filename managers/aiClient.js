@@ -243,22 +243,29 @@ export class AIClient {
           onmessage: (msg) => {
             // 1. Handle Transcriptions
             if (msg.serverContent?.outputTranscription) {
+              // AI is speaking - finalize and clear user input
               if (this.currentInputTranscription.trim().length > 0) {
                 this._flushTranscriptions(true, onTranscription, 'user')
+                this.currentInputTranscription = '' // Clear after AI starts speaking
               }
 
               const text = msg.serverContent.outputTranscription.text
               this.currentOutputTranscription += text
               onTranscription?.('model', this.currentOutputTranscription, false)
             } else if (msg.serverContent?.inputTranscription) {
-              // console.log('📝 Input Transcription:', msg.serverContent.inputTranscription.text)
+              // User is speaking - accumulate
               const text = msg.serverContent.inputTranscription.text
               this.currentInputTranscription += text
               onTranscription?.('user', this.currentInputTranscription, false)
             }
 
             if (msg.serverContent?.turnComplete) {
-              this._flushTranscriptions(true, onTranscription, 'both')
+              // Finalize user input but DON'T clear it (keep accumulating)
+              if (this.currentInputTranscription.trim().length > 0) {
+                onTranscription?.('user', this.currentInputTranscription, true)
+              }
+              // Only clear model transcriptions on turn complete
+              this._flushTranscriptions(true, onTranscription, 'model')
             }
 
             // 2. Handle Audio
@@ -446,7 +453,8 @@ export class AIClient {
       onTranscription?.('user', text, isFinal)
       if (isFinal) {
         this.internalHistory.push({ role: 'user', text, timestamp: Date.now() })
-        this.currentInputTranscription = ''
+        // NOTE: currentInputTranscription is now cleared explicitly in onmessage handler
+        // when AI starts speaking, not here
       }
     }
 
@@ -793,12 +801,14 @@ export class AIClient {
           },
           {
             name: 'look_at_user',
-            description: 'See the user via camera.',
+            description:
+              'Capture a live image of the user through their camera. Use this when curious about what they look like, their environment, or to verify visual claims. Makes conversations more personal and engaging.',
             // Strictly no parameters key for 0-argument functions
           },
           {
             name: 'look_at_screen',
-            description: 'See the user screen.',
+            description:
+              "Capture what's on the user's screen. Use this when they mention something they're working on, to help with visual tasks, or when you want proof of what they're doing. Enables true visual assistance and collaboration.",
             // Strictly no parameters key for 0-argument functions
           },
           {

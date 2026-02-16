@@ -566,7 +566,22 @@ const toggleConnection = async () => {
           }
 
           if (isFinal) {
+            // For USER messages: always append to last user message to accumulate speech
+            // For MODEL messages: check if it's a continuation
+            if (normalizedRole === 'user' && lastMsg && lastMsg.role === 'user') {
+              // Append to existing user message (accumulate across pauses)
+              lastMsg.text = normalizedText
+              lastMsg.timestamp = Date.now()
+              if (!lastMsg.id) lastMsg.id = createDebugId('msg')
+              if (!lastMsg.actorId) lastMsg.actorId = userDebugId.value
+              if (!lastMsg.userId) lastMsg.userId = userDebugId.value
+              if (!lastMsg.sessionId) lastMsg.sessionId = sessionDebugId.value
+              chatHistory.value = newHistory
+              return
+            }
+
             if (
+              normalizedRole === 'model' &&
               lastMsg &&
               lastMsg.role === normalizedRole &&
               normalizedText.startsWith(lastMsg.text.substring(0, 10))
@@ -574,9 +589,7 @@ const toggleConnection = async () => {
               lastMsg.text = normalizedText
               lastMsg.timestamp = Date.now()
               if (!lastMsg.id) lastMsg.id = createDebugId('msg')
-              if (!lastMsg.actorId) {
-                lastMsg.actorId = normalizedRole === 'user' ? userDebugId.value : ASSISTANT_ACTOR_ID
-              }
+              if (!lastMsg.actorId) lastMsg.actorId = ASSISTANT_ACTOR_ID
               if (!lastMsg.userId) lastMsg.userId = userDebugId.value
               if (!lastMsg.sessionId) lastMsg.sessionId = sessionDebugId.value
               chatHistory.value = newHistory

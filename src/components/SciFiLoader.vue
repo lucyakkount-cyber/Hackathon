@@ -124,7 +124,7 @@
       <!-- Glitch Text -->
       <h1
         class="glitch-text text-5xl sm:text-6xl font-black tracking-[0.25em] text-white font-mono drop-shadow-[0_0_20px_rgba(6,182,212,1)]"
-        data-text="QUANTUM AI SYNC"
+        data-text="QUANTUM SYNC AI"
       >
         QUANTUM AI SYNC
       </h1>
