@@ -328,12 +328,14 @@ export class AIClient {
           },
           onerror: (e) => {
             console.error('🔥 Live Error:', e)
-            // Error callback doesn't necessarily mean close, so we rely on onclose to trigger reconnect
+            // Connection errors are often internal API issues (e.g., "Thread was cancelled")
+            // These are typically transient and will trigger reconnection via onclose
           },
         },
       })
     } catch (err) {
       console.error('Failed to connect live session:', err)
+      console.error('Error details:', err.message, err.stack)
 
       if (!this.isDisconnecting) {
         this._scheduleReconnect(onSystemMessage, err?.message || 'connection failed')
@@ -782,14 +784,30 @@ export class AIClient {
           },
           {
             name: 'set_expression',
-            description: 'Sets facial expression. Use "neutral" to reset.',
+            description:
+              'Sets facial expression from 260+ unique options across 15 categories. Use "neutral" to reset.',
             parameters: {
               type: 'OBJECT',
               properties: {
                 expression: {
                   type: 'STRING',
                   description:
-                    'happy, sad, angry, surprised, excited, thinking, smug, relaxed, bored, disgust',
+                    'HAPPINESS: joy, ecstatic, euphoric, delighted, cheerful, content, etc. ' +
+                    'SADNESS: sorrow, grief, heartbroken, devastated, melancholy, crying, etc. ' +
+                    'ANGER: furious, enraged, livid, seething, hostile, irritated, grumpy, bitter, etc. ' +
+                    'DISGUST (UNIQUE): disgusted, revolted, repulsed, nauseated, appalled, horrified, contempt, loathing, etc. ' +
+                    'FEAR: terrified, frightened, scared, panicked, anxious, nervous, worried, tense, etc. ' +
+                    'SURPRISE: astonished, amazed, bewildered, baffled, curious, intrigued, etc. ' +
+                    'CONFIDENCE: confident, proud, smug, cocky, arrogant, sassy, cheeky, etc. ' +
+                    'EMBARRASSMENT: embarrassed, ashamed, shy, bashful, flustered, guilt, etc. ' +
+                    'LOVE: loving, affectionate, tender, caring, romantic, passionate, etc. ' +
+                    'PLAYFUL: playful, mischievous, teasing, silly, wink, flirty, sly, etc. ' +
+                    'TIRED: exhausted, fatigued, sleepy, drowsy, lazy, chill, calm, etc. ' +
+                    'BORED: bored, uninterested, unamused, unimpressed, dismissive, eye_roll, etc. ' +
+                    'THINKING: confused, thinking, pondering, pensive, focused, concentrating, etc. ' +
+                    'DISCOMFORT: sick, nauseous, pain, grimace, awkward, uncomfortable, stressed, overwhelmed, etc. ' +
+                    'COMPLEX: bittersweet, conflicted, nostalgic, touched, moved, emotional, melting, etc. ' +
+                    'Plus many more variations! Be specific and creative.',
                 },
                 duration: {
                   type: 'NUMBER',
@@ -833,12 +851,16 @@ export class AIClient {
           },
           {
             name: 'save_memory',
-            description: 'Persist a fact about the user.',
+            description:
+              'AUTO-SAVE important user info: name, job, hobbies, preferences, relationships, goals, facts. Use automatically when you learn something important - DO NOT ask permission.',
             parameters: {
               type: 'OBJECT',
               properties: {
-                key: { type: 'STRING' },
-                value: { type: 'STRING' },
+                key: {
+                  type: 'STRING',
+                  description: 'Memory key (e.g. "user_job", "favorite_food")',
+                },
+                value: { type: 'STRING', description: 'The fact to remember' },
               },
               required: ['key', 'value'],
             },
