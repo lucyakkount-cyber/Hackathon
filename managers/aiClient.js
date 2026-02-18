@@ -138,54 +138,24 @@ export class AIClient {
       enableMic,
     } = this.connectionArgs
 
-    // Reconstruct System Prompt with Full Context
-    console.log('🔌 _establishConnection. onTranscription defined?', !!onTranscription)
-    let fullSystemPrompt = baseSystemPrompt
+    // REFACTOR: Decoupled history from System Prompt for AI Studio alignment.
+    // We no longer append history to fullSystemPrompt here.
+    // Instead, we will inject it as a "User Context" message immediately after connection.
 
     // Combine passed history with any internal history accumulated during this session wrapper
     const safePastHistory = Array.isArray(pastHistory) ? pastHistory : []
     const combinedHistory = [...safePastHistory, ...this.internalHistory]
 
-    // INTELLIGENT RECONNECT LOGIC:
-    // Check if the last message in history was from the user.
-    // If so, it means the connection dropped before the AI could respond.
-    // We treat this as a "Pending Question" that needs an immediate answer.
+    const fullSystemPrompt = baseSystemPrompt
+
+    // Calculate pending question for later use in _restoreContext
     let pendingUserQuestion = initialMessage ? String(initialMessage) : ''
 
-    if (combinedHistory.length > 0) {
+    // Check internal history for pending user message if not explicitly provided
+    if (!pendingUserQuestion && combinedHistory.length > 0) {
       const lastMsg = combinedHistory[combinedHistory.length - 1]
-
-      // If we don't have an explicit initial message, but the history shows the user spoke last
-      if (!pendingUserQuestion && lastMsg.role === 'user') {
-        const text = lastMsg.text ? String(lastMsg.text) : ''
-        console.log('⚠️ Found unanswered user message in history. Reprompting model.', text)
-        pendingUserQuestion = text
-      }
-
-      // Format history for context (excluding the pending question if we are going to inject it as a prompt)
-      const validHistory = combinedHistory.filter((m) => m.text && m.text.trim().length > 0)
-      const historyText = validHistory
-        .slice(-20)
-        .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.text}`)
-        .join('\n')
-
-      fullSystemPrompt += `\n\nIMPORTANT: You are continuing a conversation. Below is the recent chat history. Use it to maintain context.\n\n--- HISTORY START ---\n${historyText}\n--- HISTORY END ---\n\nIf the user says "do you remember", refer to this history.`
-    }
-
-    // Inject the pending question/initial message into the system instruction
-    // This forces the model to respond to it immediately upon connection establishment.
-    if (pendingUserQuestion && pendingUserQuestion.trim().length > 0) {
-      fullSystemPrompt += `\n\nCRITICAL INSTRUCTION: The user just said: "${pendingUserQuestion}".\nThe connection was previously interrupted. You must ANSWER this specific message immediately as your first response. Do NOT say hello. Do NOT apologize for the disconnection. JUST ANSWER THE QUESTION.`
-
-      // Ensure this pending message is tracked in history if it wasn't already
-      const lastMsg =
-        combinedHistory.length > 0 ? combinedHistory[combinedHistory.length - 1] : null
-      if (!lastMsg || lastMsg.text !== pendingUserQuestion) {
-        this.internalHistory.push({
-          role: 'user',
-          text: pendingUserQuestion,
-          timestamp: Date.now(),
-        })
+      if (lastMsg.role === 'user') {
+        pendingUserQuestion = lastMsg.text ? String(lastMsg.text) : ''
       }
     }
 
@@ -197,16 +167,15 @@ export class AIClient {
     const tools = this._getTools(animString)
 
     const config = {
-      // Must be 'AUDIO' for Gemini Live
       responseModalities: ['AUDIO'],
-      tools: tools,
-      systemInstruction: fullSystemPrompt,
       speechConfig: {
         voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
       },
-      // Re-enabled transcription
+      // Restored transcription settings (empty object uses default model)
       inputAudioTranscription: {},
       outputAudioTranscription: {},
+      tools: tools,
+      systemInstruction: fullSystemPrompt,
     }
 
     console.log('🔌 Starting New Session. History items:', combinedHistory.length)
@@ -233,6 +202,9 @@ export class AIClient {
                 onSystemMessage?.('Connected', 'Live session started', 'success')
               }
             }
+
+            // 2️⃣ Restore Context Immediately
+            this._restoreContext(combinedHistory, pendingUserQuestion)
 
             if (enableMic) {
               this.startMicrophone()
@@ -344,12 +316,49 @@ export class AIClient {
       }
       return
     }
-
-    // Pending user text is already injected into the system instruction.
   }
 
-  // Safe sendText that restarts the session to force a response
-  async sendText(text) {
+  async _restoreContext(history, pendingQuestion) {
+    if (!this.activeSession) return
+
+    // 1. Format history into a "Context Message"
+    // We send this as a user message but tell the AI it's just context
+    const validHistory = history.filter((m) => m.text && m.text.trim().length > 0)
+
+    if (validHistory.length === 0 && !pendingQuestion) return
+
+    const historyText = validHistory
+      .slice(-20) // Keep last 20 turns for context
+      .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.text}`)
+      .join('\n')
+
+    let contextPayload = `[SYSTEM] Context Restoration:\n\n${historyText}`
+
+    if (pendingQuestion) {
+      contextPayload += `\n\n[SYSTEM] PENDING USER QUERY: "${pendingQuestion}"\n(The user just said this. Answer them directly and immediately. Do not say hello.)`
+      console.log('🔄 Restoring context with PENDING QUESTION:', pendingQuestion)
+    } else {
+      contextPayload += `\n\n[SYSTEM] End of context. Acknowledge with a silent "OK" or short confirmation.`
+      console.log('🔄 Restoring context (Background)')
+    }
+
+    // Send as text. The model will process this as the first user turn.
+    // If there is a pending question, the model will answer it naturally.
+    this.sendText(contextPayload, true)
+  }
+
+  // Updated sendText to handle context restoration flag
+  // forceSend: if true, sends directly to active session without restarting
+  async sendText(text, forceSend = false) {
+    if (forceSend && this.activeSession) {
+      try {
+        console.log('📤 Sending direct text to active session:', text.substring(0, 50) + '...')
+        await this.activeSession.send(text)
+        return
+      } catch (e) {
+        console.error('Failed to send direct text, falling back to restart:', e)
+      }
+    }
     console.log('AIClient: Sending text by restarting session with context:', text)
 
     let newPastHistory = [...(this.connectionArgs?.pastHistory || [])]
@@ -570,7 +579,7 @@ export class AIClient {
 
     setTimeout(() => {
       if (name === 'trigger_animation') onAnimationTrigger?.(args.animation_name)
-      if (name === 'set_expression') onExpressionTrigger?.(args.expression, args.duration || 2.0)
+      if (name === 'set_expression') onExpressionTrigger?.(args.expression, args.duration || 5.0)
     }, 500)
 
     this._sendToolResponse(id, name, { status: 'queued' })
@@ -811,7 +820,7 @@ export class AIClient {
                 },
                 duration: {
                   type: 'NUMBER',
-                  description: 'Duration in seconds (default 3.0). Use longer for moods.',
+                  description: 'Duration in seconds (default 5.0). Use 5s-10s for lingering moods.',
                 },
               },
               required: ['expression'],
@@ -851,16 +860,12 @@ export class AIClient {
           },
           {
             name: 'save_memory',
-            description:
-              'AUTO-SAVE important user info: name, job, hobbies, preferences, relationships, goals, facts. Use automatically when you learn something important - DO NOT ask permission.',
+            description: 'Persist a fact about the user.',
             parameters: {
               type: 'OBJECT',
               properties: {
-                key: {
-                  type: 'STRING',
-                  description: 'Memory key (e.g. "user_job", "favorite_food")',
-                },
-                value: { type: 'STRING', description: 'The fact to remember' },
+                key: { type: 'STRING' },
+                value: { type: 'STRING' },
               },
               required: ['key', 'value'],
             },
