@@ -14,7 +14,12 @@ export class AnimationManager {
   mainIdle = 'HappyIdle'
   currentExpression = 'neutral'
   targetExpression = 'neutral'
+  targetExpressionWeights = { neutral: 1 }
   expressionTimer = null
+  coreMoodKeys = ['neutral', 'happy', 'angry', 'sad', 'relaxed', 'surprised']
+  mouthKeys = ['aa', 'ee', 'ih', 'oh', 'ou']
+  activeExpressionKeys = new Set(this.coreMoodKeys)
+  supportedExpressionTrackCache = new Map()
 
   // Blink State
   blinkTimer = 0
@@ -29,6 +34,17 @@ export class AnimationManager {
 
   // Speaking State
   isSpeaking = false
+  expressionStyle = {
+    transitionSpeed: 5.0,
+    microAmplitude: 0.02,
+    microFrequency: 2.0,
+    squint: 0.0,
+    blinkMinInterval: 2.0,
+    blinkMaxInterval: 5.0,
+    blinkDuration: 0.15,
+    mouthBias: { aa: 0, ee: 0, ih: 0, oh: 0, ou: 0 },
+    mouthInfluenceWhileSpeaking: 0.28,
+  }
 
   expressionMap
 
@@ -333,6 +349,9 @@ export class AnimationManager {
       defiant: { angry: 0.7, surprised: 0.3 },
       rebellious: { angry: 0.6, happy: 0.3, surprised: 0.2 },
     }
+
+    this._applyExpressionTarget('neutral')
+    this.nextBlinkTime = this._getNextBlinkTime()
   }
 
   getAvailableAnimations() {
@@ -393,23 +412,184 @@ export class AnimationManager {
     }
   }
 
-  setExpression(name, duration = 3.0) {
-    const rawName = name.toLowerCase()
-    let resolved = 'neutral'
+  _hasExpressionTrack(name) {
+    if (!name || !this.vrm?.expressionManager) return false
+    if (this.supportedExpressionTrackCache.has(name)) {
+      return this.supportedExpressionTrackCache.get(name)
+    }
+    const exists = Boolean(this.vrm.expressionManager.getExpressionTrackName(name))
+    this.supportedExpressionTrackCache.set(name, exists)
+    return exists
+  }
 
-    if (this.vrm.expressionManager.getExpressionTrackName(rawName)) {
-      resolved = rawName
-    } else if (this.expressionMap[rawName]) {
-      resolved = this.expressionMap[rawName]
+  _normalizeExpressionWeights(weights = {}) {
+    const normalized = {}
+
+    for (const [key, value] of Object.entries(weights || {})) {
+      const numericValue = Number(value)
+      if (!Number.isFinite(numericValue) || numericValue <= 0) continue
+      if (!this.coreMoodKeys.includes(key) && !this._hasExpressionTrack(key)) continue
+      normalized[key] = THREE.MathUtils.clamp(numericValue, 0, 1)
     }
 
-    console.log(`😊 Face: ${name} =>`, resolved, `(${duration}s)`)
-    this.targetExpression = resolved
+    if (Object.keys(normalized).length === 0) {
+      normalized.neutral = 1
+      return normalized
+    }
+
+    const coreSum = this.coreMoodKeys.reduce((sum, key) => sum + (normalized[key] || 0), 0)
+    if (coreSum > 1.25) {
+      const scale = 1.25 / coreSum
+      for (const key of this.coreMoodKeys) {
+        if (!normalized[key]) continue
+        normalized[key] = THREE.MathUtils.clamp(normalized[key] * scale, 0, 1)
+      }
+    }
+
+    const hasCoreMood = this.coreMoodKeys.some((key) => normalized[key] > 0)
+    if (!hasCoreMood) {
+      normalized.neutral = Math.max(normalized.neutral || 0, 0.15)
+    }
+
+    return normalized
+  }
+
+  _resolveExpressionTarget(name) {
+    const rawName =
+      typeof name === 'string' && name.trim().length > 0 ? name.trim().toLowerCase() : 'neutral'
+
+    let resolvedName = rawName
+    let resolvedWeights = null
+
+    if (this._hasExpressionTrack(rawName)) {
+      resolvedWeights = { [rawName]: 1 }
+    } else {
+      const mapped = this.expressionMap[rawName]
+      if (typeof mapped === 'string') {
+        resolvedName = mapped
+        if (this._hasExpressionTrack(mapped) || this.coreMoodKeys.includes(mapped)) {
+          resolvedWeights = { [mapped]: 1 }
+        }
+      } else if (mapped && typeof mapped === 'object') {
+        resolvedWeights = { ...mapped }
+      }
+    }
+
+    if (!resolvedWeights) {
+      resolvedName = 'neutral'
+      resolvedWeights = { neutral: 1 }
+    }
+
+    return {
+      resolvedName,
+      weights: this._normalizeExpressionWeights(resolvedWeights),
+    }
+  }
+
+  _buildExpressionStyle(weights = {}) {
+    const mood = {}
+    for (const key of this.coreMoodKeys) {
+      mood[key] = THREE.MathUtils.clamp(Number(weights[key] || 0), 0, 1)
+    }
+
+    const smile = THREE.MathUtils.clamp(
+      mood.happy * 0.65 + mood.relaxed * 0.35 - mood.sad * 0.3 - mood.angry * 0.35,
+      0,
+      1,
+    )
+    const frown = THREE.MathUtils.clamp(
+      mood.sad * 0.75 + mood.angry * 0.55 - mood.happy * 0.25,
+      0,
+      1,
+    )
+    const awe = THREE.MathUtils.clamp(
+      mood.surprised * 0.9 + mood.happy * 0.15 + mood.sad * 0.2,
+      0,
+      1,
+    )
+    const tension = THREE.MathUtils.clamp(mood.angry * 0.75 + mood.surprised * 0.35, 0, 1)
+
+    const mouthBias = {
+      aa: THREE.MathUtils.clamp(awe * 0.3 + tension * 0.12, 0, 0.6),
+      ee: THREE.MathUtils.clamp(smile * 0.55, 0, 0.6),
+      ih: THREE.MathUtils.clamp(smile * 0.25 + frown * 0.28 + tension * 0.15, 0, 0.6),
+      oh: THREE.MathUtils.clamp(awe * 0.5 + mood.sad * 0.18, 0, 0.7),
+      ou: THREE.MathUtils.clamp(mood.sad * 0.35 + mood.relaxed * 0.18 + awe * 0.2, 0, 0.65),
+    }
+
+    const blinkMinInterval = THREE.MathUtils.clamp(
+      2.8 - mood.angry * 0.9 - mood.surprised * 0.8 + mood.relaxed * 1.1 + mood.sad * 0.5,
+      1.2,
+      5.4,
+    )
+    const blinkRange = THREE.MathUtils.clamp(
+      1.6 + mood.relaxed * 1.4 + mood.sad * 0.6 - mood.angry * 0.3,
+      1.2,
+      3.8,
+    )
+
+    return {
+      transitionSpeed: THREE.MathUtils.clamp(
+        4.6 + mood.angry * 2.2 + mood.surprised * 1.8 + mood.happy * 0.8 - mood.sad * 0.2,
+        4.2,
+        8.5,
+      ),
+      microAmplitude: THREE.MathUtils.clamp(
+        0.014 + mood.angry * 0.03 + mood.surprised * 0.026 + mood.happy * 0.015 + mood.sad * 0.02,
+        0.01,
+        0.08,
+      ),
+      microFrequency: THREE.MathUtils.clamp(
+        1.6 + mood.angry * 1.2 + mood.surprised * 1.0 + mood.relaxed * 0.35,
+        1.2,
+        3.8,
+      ),
+      squint: THREE.MathUtils.clamp(
+        mood.angry * 0.18 + mood.happy * 0.08 + mood.sad * 0.09 - mood.surprised * 0.15,
+        0,
+        0.3,
+      ),
+      blinkMinInterval,
+      blinkMaxInterval: blinkMinInterval + blinkRange,
+      blinkDuration: THREE.MathUtils.clamp(
+        0.11 + mood.sad * 0.03 + mood.relaxed * 0.02 - mood.surprised * 0.02,
+        0.08,
+        0.18,
+      ),
+      mouthBias,
+      mouthInfluenceWhileSpeaking: 0.28,
+    }
+  }
+
+  _getNextBlinkTime() {
+    const min = this.expressionStyle?.blinkMinInterval ?? 2
+    const max = this.expressionStyle?.blinkMaxInterval ?? 5
+    const safeMax = Math.max(min + 0.05, max)
+    return min + Math.random() * (safeMax - min)
+  }
+
+  _applyExpressionTarget(name) {
+    const resolved = this._resolveExpressionTarget(name)
+    this.currentExpression = resolved.resolvedName
+    this.targetExpression = resolved.resolvedName
+    this.targetExpressionWeights = resolved.weights
+    this.expressionStyle = this._buildExpressionStyle(this.targetExpressionWeights)
+    this.blinkDuration = this.expressionStyle.blinkDuration
+    this.nextBlinkTime = this._getNextBlinkTime()
+    return resolved
+  }
+
+  setExpression(name, duration = 3.0) {
+    const resolved = this._applyExpressionTarget(name)
+
+    console.log(`Face: ${name} => ${resolved.resolvedName}`, resolved.weights, `(${duration}s)`)
+
+    this.targetExpression = resolved.resolvedName
 
     if (this.expressionTimer) clearTimeout(this.expressionTimer)
     if (duration > 0) {
       this.expressionTimer = setTimeout(() => {
-        this.targetExpression = 'neutral'
+        this._applyExpressionTarget('neutral')
       }, duration * 1000)
     }
   }
@@ -441,7 +621,7 @@ export class AnimationManager {
     if (this.blinkTimer >= this.nextBlinkTime) {
       this.isBlinking = true
       this.blinkTimer = 0
-      this.nextBlinkTime = 2 + Math.random() * 3
+      this.nextBlinkTime = this._getNextBlinkTime()
     }
 
     if (this.isBlinking) {
@@ -455,7 +635,7 @@ export class AnimationManager {
 
   updateExpressions(delta) {
     const manager = this.vrm.expressionManager
-    const speed = 5.0 * delta
+    const speed = this.expressionStyle.transitionSpeed * delta
 
     // 1. Blink
     let blinkValue = 0
@@ -466,42 +646,58 @@ export class AnimationManager {
 
     // 2. Micro-Expressions
     this.microTimer += delta
-    this.microIntensity = Math.sin(this.microTimer * 2) * 0.05
+    this.microIntensity =
+      Math.sin(this.microTimer * this.expressionStyle.microFrequency) *
+      this.expressionStyle.microAmplitude
 
     // 3. Moods
-    const moodKeys = ['neutral', 'happy', 'angry', 'sad', 'relaxed', 'surprised']
-    const mouthKeys = ['aa', 'ee', 'ih', 'oh', 'ou']
+    const targetWeights = this.targetExpressionWeights || { neutral: 1 }
+    const keysToUpdate = new Set([
+      ...this.coreMoodKeys,
+      ...this.activeExpressionKeys,
+      ...Object.keys(targetWeights),
+    ])
+    const nextActiveKeys = new Set(this.coreMoodKeys)
 
-    moodKeys.forEach((key) => {
+    keysToUpdate.forEach((key) => {
+      if (!this.coreMoodKeys.includes(key) && !this._hasExpressionTrack(key)) return
       const currentVal = manager.getValue(key) || 0
-      let baseTarget = 0.0
+      let baseTarget = targetWeights[key] || 0.0
 
-      if (typeof this.targetExpression === 'string') {
-        baseTarget = key === this.targetExpression ? 1.0 : 0.0
-      } else if (typeof this.targetExpression === 'object') {
-        baseTarget = this.targetExpression[key] || 0.0
+      if (baseTarget > 0.05) {
+        baseTarget += this.microIntensity * Math.min(1, baseTarget + 0.2)
       }
-
-      if (baseTarget > 0.1) {
-        baseTarget += this.microIntensity
-      }
-      baseTarget = Math.max(0, Math.min(1, baseTarget))
+      baseTarget = THREE.MathUtils.clamp(baseTarget, 0, 1)
 
       const newVal = THREE.MathUtils.lerp(currentVal, baseTarget, speed)
       manager.setValue(key, newVal < 0.01 ? 0 : newVal)
+      if (newVal >= 0.01 || baseTarget >= 0.01) {
+        nextActiveKeys.add(key)
+      }
     })
+    this.activeExpressionKeys = nextActiveKeys
 
-    manager.setValue('blink', blinkValue)
+    const squintTarget = THREE.MathUtils.clamp(
+      this.expressionStyle.squint + Math.max(0, this.microIntensity * 0.2),
+      0,
+      0.35,
+    )
+    manager.setValue('blink', Math.max(blinkValue, squintTarget))
 
     // 4. Mouth Movement Control
-    // Reference Logic: If talking, let external lip-sync control it (do nothing).
-    // If NOT talking, force mouth closed.
-    if (!this.isSpeaking) {
-      mouthKeys.forEach((key) => {
-        const currentVal = manager.getValue(key) || 0
-        const newVal = THREE.MathUtils.lerp(currentVal, 0, speed)
-        manager.setValue(key, newVal < 0.01 ? 0 : newVal)
-      })
+    const speakingInfluence = this.isSpeaking ? this.expressionStyle.mouthInfluenceWhileSpeaking : 1
+    for (const key of this.mouthKeys) {
+      if (!this._hasExpressionTrack(key)) continue
+      const currentVal = manager.getValue(key) || 0
+      const emotionTarget =
+        THREE.MathUtils.clamp(
+          (this.expressionStyle.mouthBias[key] || 0) * speakingInfluence,
+          0,
+          1,
+        ) + Math.max(0, this.microIntensity * 0.35)
+      const targetVal = this.isSpeaking ? Math.max(currentVal, emotionTarget) : emotionTarget
+      const newVal = THREE.MathUtils.lerp(currentVal, targetVal, speed * 0.9)
+      manager.setValue(key, newVal < 0.01 ? 0 : newVal)
     }
 
     manager.update()

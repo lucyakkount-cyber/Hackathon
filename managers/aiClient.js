@@ -28,8 +28,9 @@ export class AIClient {
   isReconnecting = false
   reconnectAttempts = 0
   maxReconnectAttempts = 12
-  reconnectBaseDelayMs = 2000
-  reconnectMaxDelayMs = 20_000
+  reconnectFirstDelayMs = 120
+  reconnectBaseDelayMs = 300
+  reconnectMaxDelayMs = 2200
   reconnectTimer = null
   reconnectHistorySuggestionSent = false
   connectionArgs = null
@@ -42,6 +43,7 @@ export class AIClient {
 
   // Internal history to preserve context on reconnects
   internalHistory = []
+  maxInternalHistoryItems = 180
 
   constructor(apiKey, model) {
     // Prevent immediate crash if API key is missing.
@@ -82,6 +84,8 @@ export class AIClient {
     this.reconnectHistorySuggestionSent = false
     this._clearReconnectTimer()
     this.internalHistory = []
+    this.currentInputTranscription = ''
+    this.currentOutputTranscription = ''
     this.onDisconnectCallback = onDisconnect || null
 
     try {
@@ -118,6 +122,7 @@ export class AIClient {
 
   async _establishConnection() {
     if (this.isDisconnecting) return
+    const isReconnectSession = this.isReconnecting
 
     const {
       baseSystemPrompt,
@@ -148,14 +153,25 @@ export class AIClient {
 
     const fullSystemPrompt = baseSystemPrompt
 
-    // Calculate pending question for later use in _restoreContext
-    let pendingUserQuestion = initialMessage ? String(initialMessage) : ''
+    // If user explicitly sent text, always deliver it.
+    // Otherwise recover a pending user query only during reconnect
+    // and only when the latest meaningful message is from the user.
+    const explicitPendingQuestion =
+      typeof initialMessage === 'string' ? String(initialMessage).trim() : ''
+    let pendingUserQuestion = explicitPendingQuestion
+    let shouldAnswerPendingQuestion = explicitPendingQuestion.length > 0
 
-    // Check internal history for pending user message if not explicitly provided
-    if (!pendingUserQuestion && combinedHistory.length > 0) {
-      const lastMsg = combinedHistory[combinedHistory.length - 1]
-      if (lastMsg.role === 'user') {
-        pendingUserQuestion = lastMsg.text ? String(lastMsg.text) : ''
+    if (isReconnectSession && !pendingUserQuestion) {
+      const lastMsg = this._getLastMeaningfulHistoryMessage(combinedHistory)
+      if (lastMsg?.role === 'user') {
+        pendingUserQuestion = lastMsg.text
+        shouldAnswerPendingQuestion = pendingUserQuestion.length > 0
+        if (shouldAnswerPendingQuestion) {
+          console.log(
+            'Reconnect recovery: answering last pending user message:',
+            pendingUserQuestion,
+          )
+        }
       }
     }
 
@@ -204,7 +220,9 @@ export class AIClient {
             }
 
             // 2️⃣ Restore Context Immediately
-            this._restoreContext(combinedHistory, pendingUserQuestion)
+            this._restoreContext(combinedHistory, pendingUserQuestion, {
+              shouldAnswerPendingQuestion,
+            })
 
             if (enableMic) {
               this.startMicrophone()
@@ -217,8 +235,9 @@ export class AIClient {
             if (msg.serverContent?.outputTranscription) {
               // AI is speaking - finalize and clear user input
               if (this.currentInputTranscription.trim().length > 0) {
-                this._flushTranscriptions(true, onTranscription, 'user')
-                this.currentInputTranscription = '' // Clear after AI starts speaking
+                this._flushTranscriptions(true, onTranscription, 'user', {
+                  clearUserBuffer: true,
+                })
               }
 
               const text = msg.serverContent.outputTranscription.text
@@ -287,7 +306,9 @@ export class AIClient {
             // IMPORTANT: Flush any partial transcriptions to history BEFORE attempting reconnect.
             // This ensures if the user was speaking, their words are captured in history
             // so the next session knows to answer them.
-            this._flushTranscriptions(true, onTranscription, 'both')
+            this._flushTranscriptions(true, onTranscription, 'both', {
+              clearUserBuffer: true,
+            })
 
             // If the user manually disconnected, stop here.
             if (this.isDisconnecting) return
@@ -318,25 +339,48 @@ export class AIClient {
     }
   }
 
-  async _restoreContext(history, pendingQuestion) {
+  async _restoreContext(history, pendingQuestion, options = {}) {
     if (!this.activeSession) return
+    const { shouldAnswerPendingQuestion = false } = options
 
-    // 1. Format history into a "Context Message"
+    // 1. Format history into a compact "Context Message"
     // We send this as a user message but tell the AI it's just context
-    const validHistory = history.filter((m) => m.text && m.text.trim().length > 0)
+    const validHistory = history.filter((m) => m?.text && m.text.trim().length > 0)
+    const normalizedPendingQuestion =
+      typeof pendingQuestion === 'string' ? pendingQuestion.trim() : ''
+    const shouldRecoverQuestion = shouldAnswerPendingQuestion && normalizedPendingQuestion.length > 0
 
-    if (validHistory.length === 0 && !pendingQuestion) return
+    if (validHistory.length === 0 && !shouldRecoverQuestion) return
 
-    const historyText = validHistory
-      .slice(-20) // Keep last 20 turns for context
-      .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.text}`)
-      .join('\n')
+    let contextHistory = validHistory
+    if (shouldRecoverQuestion && validHistory.length > 0) {
+      const lastMsg = validHistory[validHistory.length - 1]
+      if (
+        lastMsg?.role === 'user' &&
+        String(lastMsg.text || '').trim().toLowerCase() === normalizedPendingQuestion.toLowerCase()
+      ) {
+        contextHistory = validHistory.slice(0, -1)
+      }
+    }
 
-    let contextPayload = `[SYSTEM] Context Restoration:\n\n${historyText}`
+    const historyText = contextHistory.length
+      ? contextHistory
+          .slice(-16)
+          .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.text}`)
+          .join('\n')
+      : ''
 
-    if (pendingQuestion) {
-      contextPayload += `\n\n[SYSTEM] PENDING USER QUERY: "${pendingQuestion}"\n(The user just said this. Answer them directly and immediately. Do not say hello.)`
-      console.log('🔄 Restoring context with PENDING QUESTION:', pendingQuestion)
+    let contextPayload = `[SYSTEM] Context Restoration:`
+    if (historyText) {
+      contextPayload += `\n\n${historyText}`
+    }
+
+    if (shouldRecoverQuestion) {
+      contextPayload +=
+        `\n\n[SYSTEM] RECONNECT RULE: The user already asked this before disconnect.` +
+        `\nUNANSWERED USER QUERY: "${normalizedPendingQuestion}"` +
+        `\nRespond immediately. Do not greet. Do not ask them to repeat.`
+      console.log('Restoring context with PENDING QUESTION:', normalizedPendingQuestion)
     } else {
       contextPayload += `\n\n[SYSTEM] End of context. Acknowledge with a silent "OK" or short confirmation.`
       console.log('🔄 Restoring context (Background)')
@@ -413,6 +457,39 @@ export class AIClient {
     this.reconnectTimer = null
   }
 
+  _getLastMeaningfulHistoryMessage(history = []) {
+    if (!Array.isArray(history)) return null
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      const item = history[i]
+      const text = typeof item?.text === 'string' ? item.text.trim() : ''
+      if (!text) continue
+      const role = item?.role === 'user' ? 'user' : 'model'
+      return { role, text }
+    }
+    return null
+  }
+
+  _pushInternalHistory(role, text) {
+    const normalizedRole = role === 'user' ? 'user' : 'model'
+    const normalizedText = typeof text === 'string' ? text.trim() : ''
+    if (!normalizedText) return
+
+    const hasRecentDuplicate = this.internalHistory
+      .slice(-6)
+      .some((item) => item?.role === normalizedRole && item?.text === normalizedText)
+    if (hasRecentDuplicate) return
+
+    this.internalHistory.push({
+      role: normalizedRole,
+      text: normalizedText,
+      timestamp: Date.now(),
+    })
+
+    if (this.internalHistory.length > this.maxInternalHistoryItems) {
+      this.internalHistory = this.internalHistory.slice(-this.maxInternalHistoryItems)
+    }
+  }
+
   _scheduleReconnect(onSystemMessage, reason = 'Connection lost') {
     if (this.isDisconnecting) return
     if (this.reconnectTimer) return
@@ -431,10 +508,10 @@ export class AIClient {
     }
 
     const attempt = this.reconnectAttempts
-    const delayMs = Math.min(
-      this.reconnectMaxDelayMs,
-      this.reconnectBaseDelayMs * 2 ** Math.max(0, attempt - 1),
-    )
+    const exponentialDelay = this.reconnectBaseDelayMs * 2 ** Math.max(0, attempt - 2)
+    const baseDelay = attempt === 1 ? this.reconnectFirstDelayMs : exponentialDelay
+    const jitterMs = Math.floor(Math.random() * 120)
+    const delayMs = Math.min(this.reconnectMaxDelayMs, baseDelay + jitterMs)
     const delaySeconds = Math.ceil(delayMs / 1000)
 
     onSystemMessage?.(
@@ -458,14 +535,17 @@ export class AIClient {
     }, delayMs)
   }
 
-  _flushTranscriptions(isFinal, onTranscription, target = 'both') {
+  _flushTranscriptions(isFinal, onTranscription, target = 'both', options = {}) {
+    const { clearUserBuffer = false } = options
+
     if ((target === 'user' || target === 'both') && this.currentInputTranscription.trim()) {
       const text = this.currentInputTranscription
       onTranscription?.('user', text, isFinal)
       if (isFinal) {
-        this.internalHistory.push({ role: 'user', text, timestamp: Date.now() })
-        // NOTE: currentInputTranscription is now cleared explicitly in onmessage handler
-        // when AI starts speaking, not here
+        this._pushInternalHistory('user', text)
+        if (clearUserBuffer) {
+          this.currentInputTranscription = ''
+        }
       }
     }
 
@@ -473,7 +553,7 @@ export class AIClient {
       const text = this.currentOutputTranscription
       onTranscription?.('model', text, isFinal)
       if (isFinal) {
-        this.internalHistory.push({ role: 'model', text, timestamp: Date.now() })
+        this._pushInternalHistory('model', text)
         this.currentOutputTranscription = ''
       }
     }
@@ -762,7 +842,9 @@ export class AIClient {
     this.isSessionOpen = false
     this.stopMicrophone()
 
-    this._flushTranscriptions(true, this.connectionArgs?.onTranscription, 'both')
+    this._flushTranscriptions(true, this.connectionArgs?.onTranscription, 'both', {
+      clearUserBuffer: true,
+    })
 
     if (this.activeSession) {
       try {
@@ -902,3 +984,4 @@ export class AIClient {
     ]
   }
 }
+
