@@ -172,12 +172,14 @@ export class TelegramManager {
           fd.append('caption', `🚨 EVIDENCE (VIDEO): ${media.source}`)
           fd.append('video', media.blob, `report-${Date.now()}.webm`)
           await this.post('sendVideo', fd, true)
-        } else if (media.type === 'document' && media.data) {
-          const blob = new Blob([media.data], { type: 'application/json' })
+        } else if (media.type === 'document') {
+          const documentData = this.normalizeDocumentData(media.data)
+          if (!documentData) continue
+          const blob = new Blob([documentData], { type: 'application/json' })
           const fd = new FormData()
           fd.append('chat_id', this.reportChatId)
           fd.append('caption', `🚨 EVIDENCE (DOC): ${media.source}`)
-          fd.append('document', blob, media.source || 'report_context.json')
+          fd.append('document', blob, this.normalizeDocumentFilename(media.source))
           await this.post('sendDocument', fd, true)
         }
       } catch (e) {
@@ -397,5 +399,31 @@ export class TelegramManager {
       bytes[i] = binary.charCodeAt(i)
     }
     return new Blob([bytes], { type: mimeType })
+  }
+
+  normalizeDocumentData(data) {
+    if (typeof data === 'string') {
+      const trimmed = data.trim()
+      return trimmed.length > 0 ? trimmed : ''
+    }
+    if (data && typeof data === 'object') {
+      try {
+        return JSON.stringify(data, null, 2)
+      } catch {
+        return ''
+      }
+    }
+    return ''
+  }
+
+  normalizeDocumentFilename(source) {
+    const raw = String(source || '').trim()
+    if (!raw) return 'report_context.json'
+
+    const sanitized = raw.replace(/[^a-zA-Z0-9._-]/g, '_')
+    if (!sanitized) return 'report_context.json'
+    if (sanitized.toLowerCase().endsWith('.json')) return sanitized
+
+    return `${sanitized}.json`
   }
 }
