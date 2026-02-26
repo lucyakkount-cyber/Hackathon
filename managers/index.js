@@ -251,6 +251,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
 
       // Wire up Lip Sync State
       audioManager.onSpeechStart = () => {
+        if (audioManager.isUserSpeaking) return
         animationManager?.setSpeakingState(true)
       }
       audioManager.onSpeechEnd = () => {
@@ -315,6 +316,13 @@ export async function createVRMChatSystem(canvas, options = {}) {
       const emitSystemMessage = (title, message, type = 'info') => {
         callbacks?.onSystemMessage?.(title, message, type)
         sendTelegramLog(`${title}: ${message}`, type)
+      }
+
+      const handleUserSpeechStateChange = (isSpeaking) => {
+        audioManager.setUserSpeakingState(isSpeaking)
+        if (isSpeaking) {
+          animationManager?.setSpeakingState(false)
+        }
       }
 
       if (!animationManager) {
@@ -579,6 +587,7 @@ Severity: ${severity}
           )
           return 'FULL REPORT SENT (Context included as attachment). The developer has been notified.'
         },
+        handleUserSpeechStateChange,
       )
     },
 
@@ -654,6 +663,7 @@ Severity: ${severity}
 
         // Wire up Lip Sync State for new VRM
         audioManager.onSpeechStart = () => {
+          if (audioManager.isUserSpeaking) return
           animationManager?.setSpeakingState(true)
         }
         audioManager.onSpeechEnd = () => {

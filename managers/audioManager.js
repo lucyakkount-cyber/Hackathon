@@ -7,6 +7,8 @@ export class AudioManager {
   onSpeechStart = null
   onSpeechEnd = null
   isPlaying = false
+  isUserSpeaking = false
+  currentVrm = null
 
   async initialize() {
     if (this.audioCtx) return
@@ -24,18 +26,20 @@ export class AudioManager {
     // In this simplified architecture, we'll try to find it on the window or pass it differently.
     // For now, let's assume `window.currentVrm` exists or we just play audio.
     const vrm = window.currentVrm
-    await this.playChunk(int16Data, vrm)
+    if (vrm) this.currentVrm = vrm
+    if (this.isUserSpeaking) return
+    await this.playChunk(int16Data, vrm || this.currentVrm)
   }
 
   async playChunk(int16Data, vrm = null) {
+    if (this.isUserSpeaking) return
     if (!this.audioCtx) await this.initialize()
     if (!this.audioCtx) return
     if (this.audioCtx.state === 'suspended') await this.audioCtx.resume()
 
-    if (!this.isPlaying) {
-      this.isPlaying = true
-      if (this.onSpeechStart) this.onSpeechStart()
-    }
+    if (vrm) this.currentVrm = vrm
+
+    this.setPlaybackState(true)
 
     const float32Data = new Float32Array(int16Data.length)
     for (let i = 0; i < int16Data.length; i++) {
@@ -60,22 +64,22 @@ export class AudioManager {
       this.activeSources = this.activeSources.filter((s) => s !== source)
     }
 
-    if (vrm && !this.mouthRaf) this.startMouthSync(vrm)
+    if (this.currentVrm && !this.mouthRaf) this.startMouthSync(this.currentVrm)
   }
 
   startMouthSync(vrm) {
     const tick = () => {
       if (!this.audioCtx || !this.analyser) return
 
-      if (this.audioCtx.currentTime > this.nextStartTime + 0.1) {
-        vrm.expressionManager?.setValue('aa', 0)
-        vrm.expressionManager?.update()
-        this.mouthRaf = null
+      if (this.isUserSpeaking) {
+        this.stopMouthSync(vrm)
+        this.setPlaybackState(false)
+        return
+      }
 
-        if (this.isPlaying) {
-          this.isPlaying = false
-          if (this.onSpeechEnd) this.onSpeechEnd()
-        }
+      if (this.audioCtx.currentTime > this.nextStartTime + 0.1) {
+        this.stopMouthSync(vrm)
+        this.setPlaybackState(false)
         return
       }
 
@@ -98,7 +102,59 @@ export class AudioManager {
     this.mouthRaf = requestAnimationFrame(tick)
   }
 
+  setUserSpeakingState(isSpeaking) {
+    const next = Boolean(isSpeaking)
+    if (this.isUserSpeaking === next) return
+    this.isUserSpeaking = next
+
+    if (this.isUserSpeaking) {
+      this.interruptPlayback()
+    }
+  }
+
+  interruptPlayback() {
+    for (const source of this.activeSources) {
+      try {
+        source.onended = null
+        source.stop(0)
+      } catch {}
+    }
+    this.activeSources = []
+
+    if (this.audioCtx) {
+      this.nextStartTime = this.audioCtx.currentTime
+    } else {
+      this.nextStartTime = 0
+    }
+
+    this.stopMouthSync(this.currentVrm || window.currentVrm || null)
+    this.setPlaybackState(false)
+  }
+
+  stopMouthSync(vrm = null) {
+    if (this.mouthRaf) {
+      cancelAnimationFrame(this.mouthRaf)
+      this.mouthRaf = null
+    }
+
+    const targetVrm = vrm || this.currentVrm || window.currentVrm || null
+    targetVrm?.expressionManager?.setValue('aa', 0)
+    targetVrm?.expressionManager?.update()
+  }
+
+  setPlaybackState(nextIsPlaying) {
+    if (this.isPlaying === nextIsPlaying) return
+    this.isPlaying = nextIsPlaying
+    if (nextIsPlaying) {
+      this.onSpeechStart?.()
+    } else {
+      this.onSpeechEnd?.()
+    }
+  }
+
   cleanup() {
+    this.interruptPlayback()
     if (this.audioCtx) this.audioCtx.close()
+    this.audioCtx = null
   }
 }

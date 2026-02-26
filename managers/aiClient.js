@@ -36,6 +36,10 @@ export class AIClient {
   connectionArgs = null
   recognition = null
   onDisconnectCallback = null
+  onUserSpeechStateChange = null
+  isUserSpeaking = false
+  userSpeechReleaseTimer = null
+  userSpeechReleaseMs = 700
 
   // Transcription state
   currentInputTranscription = ''
@@ -74,6 +78,7 @@ export class AIClient {
     initialMessage = '',
     enableMic = true,
     onBehaviorReport,
+    onUserSpeechStateChange,
   ) {
     if (this.activeSession) return
 
@@ -87,6 +92,10 @@ export class AIClient {
     this.currentInputTranscription = ''
     this.currentOutputTranscription = ''
     this.onDisconnectCallback = onDisconnect || null
+    this.onUserSpeechStateChange =
+      typeof onUserSpeechStateChange === 'function' ? onUserSpeechStateChange : null
+    this._resetVoiceActivityState()
+    this._setUserSpeakingState(false, true)
 
     try {
       this.connectionArgs = {
@@ -110,6 +119,7 @@ export class AIClient {
         initialMessage,
         enableMic,
         onBehaviorReport,
+        onUserSpeechStateChange,
       }
 
       await this._establishConnection()
@@ -141,7 +151,11 @@ export class AIClient {
       pastHistory,
       initialMessage,
       enableMic,
+      onUserSpeechStateChange,
     } = this.connectionArgs
+
+    this.onUserSpeechStateChange =
+      typeof onUserSpeechStateChange === 'function' ? onUserSpeechStateChange : null
 
     // REFACTOR: Decoupled history from System Prompt for AI Studio alignment.
     // We no longer append history to fullSystemPrompt here.
@@ -233,6 +247,9 @@ export class AIClient {
           onmessage: (msg) => {
             // 1. Handle Transcriptions
             if (msg.serverContent?.outputTranscription) {
+              this._setUserSpeakingState(false)
+              this._clearUserSpeechReleaseTimer()
+
               // AI is speaking - finalize and clear user input
               if (this.currentInputTranscription.trim().length > 0) {
                 this._flushTranscriptions(true, onTranscription, 'user', {
@@ -246,11 +263,18 @@ export class AIClient {
             } else if (msg.serverContent?.inputTranscription) {
               // User is speaking - accumulate
               const text = msg.serverContent.inputTranscription.text
+              if (this._isMeaningfulSpeechText(text)) {
+                this._setUserSpeakingState(true)
+                this._armUserSpeechReleaseTimer()
+              }
               this.currentInputTranscription += text
               onTranscription?.('user', this.currentInputTranscription, false)
             }
 
             if (msg.serverContent?.turnComplete) {
+              this._setUserSpeakingState(false)
+              this._clearUserSpeechReleaseTimer()
+
               // Finalize user input but DON'T clear it (keep accumulating)
               if (this.currentInputTranscription.trim().length > 0) {
                 onTranscription?.('user', this.currentInputTranscription, true)
@@ -302,6 +326,8 @@ export class AIClient {
             console.log('❌ Connection Closed', e)
             this.isSessionOpen = false
             this.activeSession = null
+            this._setUserSpeakingState(false, true)
+            this._resetVoiceActivityState()
 
             // IMPORTANT: Flush any partial transcriptions to history BEFORE attempting reconnect.
             // This ensures if the user was speaking, their words are captured in history
@@ -445,6 +471,8 @@ export class AIClient {
         newPastHistory,
         text,
         false,
+        this.connectionArgs.onBehaviorReport,
+        this.connectionArgs.onUserSpeechStateChange,
       )
     } else {
       console.error('AIClient: Cannot restart session, no connection args.')
@@ -758,12 +786,21 @@ export class AIClient {
   async startMicrophone() {
     if (this.isRecording) return
     try {
+      this._resetVoiceActivityState()
+      this._setUserSpeakingState(false, true)
+
       this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: 16000,
       })
 
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, sampleRate: 16000 },
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       })
 
       if (!this.audioContext || this.isDisconnecting) return
@@ -788,6 +825,8 @@ export class AIClient {
 
   stopMicrophone() {
     this.isRecording = false
+    this._setUserSpeakingState(false, true)
+    this._resetVoiceActivityState()
     this.mediaStream?.getTracks().forEach((t) => t.stop())
     this.mediaStream = null
     this.workletNode?.disconnect()
@@ -822,6 +861,51 @@ export class AIClient {
     } catch (e) {
       if (!e.message.includes('closed')) console.error('Audio Send Error:', e)
     }
+  }
+
+  _isMeaningfulSpeechText(text) {
+    if (typeof text !== 'string') return false
+    const cleaned = text
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\[[^\]]*]/g, ' ')
+      .replace(/\b(noise|silence|music|laughter|laugh|breath|breathing|applause)\b/gi, ' ')
+      .trim()
+
+    if (!cleaned) return false
+    return /[A-Za-z]{2,}|[0-9]{2,}/.test(cleaned)
+  }
+
+  _armUserSpeechReleaseTimer() {
+    this._clearUserSpeechReleaseTimer()
+    this.userSpeechReleaseTimer = setTimeout(() => {
+      this.userSpeechReleaseTimer = null
+      this._setUserSpeakingState(false)
+    }, this.userSpeechReleaseMs)
+  }
+
+  _clearUserSpeechReleaseTimer() {
+    if (!this.userSpeechReleaseTimer) return
+    clearTimeout(this.userSpeechReleaseTimer)
+    this.userSpeechReleaseTimer = null
+  }
+
+  _setUserSpeakingState(isSpeaking, force = false) {
+    const next = Boolean(isSpeaking)
+    if (!force && this.isUserSpeaking === next) return
+    this.isUserSpeaking = next
+    if (!next) this._clearUserSpeechReleaseTimer()
+
+    if (typeof this.onUserSpeechStateChange === 'function') {
+      try {
+        this.onUserSpeechStateChange(next)
+      } catch (error) {
+        console.error('User speech state callback failed:', error)
+      }
+    }
+  }
+
+  _resetVoiceActivityState() {
+    this._clearUserSpeechReleaseTimer()
   }
 
   disconnect(reason = 'User disconnected') {
