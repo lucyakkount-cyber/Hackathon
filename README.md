@@ -8,6 +8,18 @@ A state-of-the-art interactive 3D Avatar system powered by Google Gemini 2.0 Fla
 ![Status](https://img.shields.io/badge/status-Stable-emerald)
 ![Engine](https://img.shields.io/badge/engine-Three.js_r160-white)
 
+## Hackathon Project Idea (English)
+
+**Short project idea:** We are building a real-time AI avatar assistant that can talk, understand emotions, react with expressions and animations, and improve safe human-AI interaction.
+
+**Problem we want to solve on hackathon day:** Most AI chat tools are text-heavy and emotionally flat, and they often do not provide strong real-time safety response when user behavior becomes threatening.
+
+**Proposed solution:**
+- Use a live 3D VRM avatar with voice conversation to make communication natural and engaging.
+- Add dynamic facial and body reactions so the assistant behavior matches the context.
+- Integrate a safety pipeline that detects threats, captures evidence, and sends a Telegram report for fast moderation.
+- Keep the system practical with model and animation optimization for fast loading and stable long sessions.
+
 ## ✨ Key Features
 
 ### 🧠 **Neural "Rico" Persona**
@@ -81,4 +93,3 @@ A state-of-the-art interactive 3D Avatar system powered by Google Gemini 2.0 Fla
 - **Drag & Drop**: Drag any `.vrm` file into the window to swap your avatar instantly.
 
 ---
-
