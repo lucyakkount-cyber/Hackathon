@@ -145,6 +145,55 @@ export default defineConfig(({ mode }) => {
       basicSsl(), // <--- ADD THIS
       createTelegramRelayPlugin(telegramBotToken),
     ],
+    build: {
+      chunkSizeWarningLimit: 600,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return
+
+            if (id.includes('/three/examples/')) {
+              return 'vendor-three-extras'
+            }
+
+            if (id.includes('/three/')) {
+              return 'vendor-three-core'
+            }
+
+            if (id.includes('/@pixiv/three-vrm-animation/')) {
+              return 'vendor-vrm-animation'
+            }
+
+            if (id.includes('/@pixiv/three-vrm/')) {
+              return 'vendor-vrm-core'
+            }
+
+            if (
+              id.includes('/@google/genai') ||
+              id.includes('/@google/generative-ai') ||
+              id.includes('/openai/')
+            ) {
+              return 'vendor-ai'
+            }
+
+            if (
+              id.includes('/vue/') ||
+              id.includes('/pinia/') ||
+              id.includes('/vue-router/') ||
+              id.includes('/@heroicons/')
+            ) {
+              return 'vendor-vue'
+            }
+
+            if (id.includes('/@xenova/transformers/')) {
+              return 'vendor-ml'
+            }
+
+            return 'vendor-misc'
+          },
+        },
+      },
+    },
     server: {
       host: true,
       https: true, // <--- ENABLE HTTPS

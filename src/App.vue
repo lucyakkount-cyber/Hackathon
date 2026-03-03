@@ -79,7 +79,7 @@
       </div>
     </div>
 
-    <div v-if="showChat" class="absolute inset-0 z-40" @click.self="showChat = false">
+    <div v-if="showChat" class="absolute inset-0 z-40">
       <ChatSidebar
         :chatHistory="chatHistory"
         @clear-history="clearHistory"
