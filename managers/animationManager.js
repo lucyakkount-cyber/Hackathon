@@ -363,7 +363,7 @@ export class AnimationManager {
     return [
       { name: 'HappyIdle', path: '/animations/HappyIdle.vrma', loop: true },
       { name: 'wave', path: '/animations/Waving.vrma', loop: false },
-      { name: 'Macarena_dance', path: '/animations/MacarenaDance.vrma', loop: true },
+      { name: 'Macarena_dance', path: '/animations/MacarenaDance.vrma', loop: false },
       { name: 'dance', path: '/animations/HipHopDance.vrma', loop: false },
       { name: 'clap', path: '/animations/Clapping.vrma', loop: false },
       { name: 'thumbs_up', path: '/animations/ThumbsUp.vrma', loop: false },
@@ -769,19 +769,38 @@ export class AnimationManager {
   }
 
   triggerNamedAnimation(name) {
+    if (typeof name !== 'string' || !name.trim()) return
+    const requestedName = name.trim()
+
     // 1. Exact Match
-    if (this.actions[name]) {
-      this.play(name)
+    if (this.actions[requestedName]) {
+      this.play(requestedName)
       return
     }
+
     // 2. Case-Insensitive Match
-    const lowerName = name.toLowerCase()
+    const lowerName = requestedName.toLowerCase()
     const foundKey = Object.keys(this.actions).find((k) => k.toLowerCase() === lowerName)
     if (foundKey) {
       this.play(foundKey)
       return
     }
-    console.warn(`⚠️ Animation '${name}' not found.`)
+
+    // 3. Lazy-load from catalog for cold-start cases (e.g. cutthroat before preload ends)
+    const catalogMatch = this.getAnimationCatalog().find((file) => file.name.toLowerCase() === lowerName)
+    if (catalogMatch) {
+      void this.loadAnimationFile(catalogMatch)
+        .then(() => {
+          const loadedKey = Object.keys(this.actions).find((k) => k.toLowerCase() === lowerName)
+          if (loadedKey) this.play(loadedKey)
+        })
+        .catch((error) => {
+          console.warn(`Animation '${requestedName}' failed to load on demand.`, error)
+        })
+      return
+    }
+
+    console.warn(`Animation '${requestedName}' not found.`)
   }
 
   onAnimationFinished(e) {

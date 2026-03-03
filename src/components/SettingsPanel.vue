@@ -1,6 +1,6 @@
-﻿<template>
+<template>
   <div
-    class="panel-shell absolute bottom-24 left-1/2 z-30 w-[min(380px,calc(100%-1.5rem))] -translate-x-1/2 rounded-3xl border border-cyan-500/20 bg-black/80 p-5 backdrop-blur-xl shadow-[0_0_40px_rgba(0,0,0,0.6)] transition-all duration-300 ease-out"
+    class="panel-shell no-scrollbar absolute bottom-4 left-1/2 z-30 max-h-[calc(100vh-7.5rem)] w-[min(420px,calc(100%-1.5rem))] -translate-x-1/2 overflow-y-auto rounded-3xl border border-cyan-500/20 bg-black/80 p-5 backdrop-blur-xl shadow-[0_0_40px_rgba(0,0,0,0.6)] transition-all duration-300 ease-out sm:bottom-24 sm:max-h-[calc(100vh-10rem)]"
   >
     <div class="mb-5 flex items-center justify-between border-b border-white/5 pb-4">
       <div class="flex items-center gap-2">
@@ -20,14 +20,12 @@
     </div>
 
     <div class="space-y-6">
-      <!-- Avatar Model Section -->
       <div class="space-y-3">
         <p class="text-[10px] font-mono uppercase tracking-[0.15em] text-cyan-500/50 ml-1">
           Identity Matrix
         </p>
 
         <div class="space-y-2 max-h-[160px] overflow-y-auto pr-1 no-scrollbar">
-          <!-- Default Model -->
           <div
             class="group relative flex items-center justify-between rounded-xl border border-white/5 bg-white/5 p-3 transition-all hover:bg-cyan-900/20 hover:border-cyan-500/30 cursor-pointer"
             @click="$emit('switch-model', null)"
@@ -51,7 +49,6 @@
             </div>
           </div>
 
-          <!-- User Models -->
           <div
             v-for="model in availableModels"
             :key="model.key"
@@ -86,7 +83,31 @@
         </div>
       </div>
 
-      <!-- Avatar Scale -->
+      <div class="space-y-3 pt-4 border-t border-white/5">
+        <div class="flex items-center justify-between">
+          <p class="text-[10px] font-mono uppercase tracking-[0.15em] text-cyan-500/50 ml-1">
+            AI Persona
+          </p>
+          <button
+            class="inline-flex items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.12em] text-cyan-200 transition hover:bg-cyan-500/20"
+            @click="$emit('open-persona-manager')"
+          >
+            <PencilSquareIcon class="h-3.5 w-3.5" />
+            Edit Personas
+          </button>
+        </div>
+
+        <div class="rounded-xl border border-white/10 bg-black/35 p-3">
+          <div class="flex items-center gap-2">
+            <SparklesIcon class="h-4 w-4 text-cyan-300/80" />
+            <p class="text-xs font-semibold text-white/90 truncate">{{ activePersonaTitle }}</p>
+          </div>
+          <p class="mt-1 text-[10px] leading-relaxed text-white/50">
+            {{ activePersonaDescription || 'Original Riko personality used by the app.' }}
+          </p>
+        </div>
+      </div>
+
       <div class="space-y-3 pt-4 border-t border-white/5">
         <div class="flex items-center justify-between">
           <p class="text-[10px] font-mono uppercase tracking-[0.15em] text-cyan-500/50 ml-1">
@@ -112,14 +133,12 @@
         </div>
       </div>
 
-      <!-- Vision Controls -->
       <div class="space-y-3 pt-4 border-t border-white/5">
         <p class="text-[10px] font-mono uppercase tracking-[0.15em] text-cyan-500/50 ml-1">
           Vision Sensors
         </p>
 
         <div class="flex gap-2">
-          <!-- Look At User -->
           <button
             class="flex-1 rounded-xl border p-3 transition-all duration-300 text-left relative overflow-hidden group shadow-lg"
             :class="
@@ -159,7 +178,6 @@
             </div>
           </button>
 
-          <!-- Look At Screen -->
           <button
             class="flex-1 rounded-xl border p-3 transition-all duration-300 text-left relative overflow-hidden group shadow-lg"
             :class="
@@ -210,14 +228,16 @@
 
 <script setup>
 import {
-  XMarkIcon,
+  ComputerDesktopIcon,
   CubeIcon,
-  UserCircleIcon,
-  TrashIcon,
   EyeIcon,
   EyeSlashIcon,
-  ComputerDesktopIcon,
-  NoSymbolIcon, // Using as "crossed screen" since there isn't a direct ScreenSlash
+  NoSymbolIcon,
+  PencilSquareIcon,
+  SparklesIcon,
+  TrashIcon,
+  UserCircleIcon,
+  XMarkIcon,
 } from '@heroicons/vue/24/solid'
 
 const props = defineProps({
@@ -237,6 +257,14 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  activePersonaTitle: {
+    type: String,
+    default: 'Default Riko',
+  },
+  activePersonaDescription: {
+    type: String,
+    default: '',
+  },
 })
 
 const emit = defineEmits([
@@ -246,6 +274,7 @@ const emit = defineEmits([
   'update:lookAtScreenEnabled',
   'switch-model',
   'delete-model',
+  'open-persona-manager',
 ])
 
 const handleScaleChange = (event) => {

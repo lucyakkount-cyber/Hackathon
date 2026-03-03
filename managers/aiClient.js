@@ -40,6 +40,8 @@ export class AIClient {
   isUserSpeaking = false
   userSpeechReleaseTimer = null
   userSpeechReleaseMs = 700
+  lastAutoAngryAnimationAt = 0
+  autoAngryAnimationCooldownMs = 5500
 
   // Transcription state
   currentInputTranscription = ''
@@ -615,6 +617,23 @@ export class AIClient {
       )
   }
 
+  _isAngerExpression(expressionName) {
+    if (typeof expressionName !== 'string') return false
+    const normalized = expressionName.trim().toLowerCase()
+    if (!normalized) return false
+    return /\b(angry|furious|enraged|livid|seething|fuming|irate|wrathful|hostile|aggressive|annoyed|agitated|resentful|defiant|serious|determined)\b/.test(
+      normalized,
+    )
+  }
+
+  _maybeTriggerAngryAnimation(expressionName, onAnimationTrigger) {
+    if (!this._isAngerExpression(expressionName)) return
+    const now = Date.now()
+    if (now - this.lastAutoAngryAnimationAt < this.autoAngryAnimationCooldownMs) return
+    this.lastAutoAngryAnimationAt = now
+    onAnimationTrigger?.('angry')
+  }
+
   _executeFunction(
     fc,
     onAnimationTrigger,
@@ -647,6 +666,8 @@ export class AIClient {
     }
 
     if (name === 'report_behavior') {
+      onExpressionTrigger?.('furious', 8.0)
+      onAnimationTrigger?.('cutthroat')
       // Pass the callback if provided in connection args, efficiently handled in index.js
       this.connectionArgs?.onBehaviorReport?.(args.reason, args.severity)
       this._sendToolResponse(id, name, { result: 'Report sent to developer.' })
@@ -686,8 +707,12 @@ export class AIClient {
     }
 
     setTimeout(() => {
-      if (name === 'trigger_animation') onAnimationTrigger?.(args.animation_name)
-      if (name === 'set_expression') onExpressionTrigger?.(args.expression, args.duration || 5.0)
+      if (name === 'trigger_animation') onAnimationTrigger?.(args?.animation_name)
+      if (name === 'set_expression') {
+        const expressionName = args?.expression
+        onExpressionTrigger?.(expressionName, args?.duration || 5.0)
+        this._maybeTriggerAngryAnimation(expressionName, onAnimationTrigger)
+      }
     }, 500)
 
     this._sendToolResponse(id, name, { status: 'queued' })

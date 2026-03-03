@@ -305,6 +305,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
       enableMic = true,
       userName = null,
       identity = null,
+      personaPrompt = '',
     ) {
       const safeHistory = Array.isArray(history) ? history : []
       const normalizedUserName = typeof userName === 'string' ? userName.trim() : ''
@@ -326,6 +327,82 @@ export async function createVRMChatSystem(canvas, options = {}) {
           animationManager?.setSpeakingState(false)
         }
       }
+      const THREAT_EVIDENCE_COOLDOWN_MS = 60_000
+      const THREAT_TEXT_PREVIEW_MAX = 280
+      let lastThreatEvidenceAt = 0
+      let threatEvidenceInFlight = false
+
+      const threatPhraseRegex =
+        /\b(kill you|hurt you|hack you|doxx? you|leak your|destroy you|beat you|attack you)\b/i
+      const threatTargetRegex = /\b(you|u|your|riko|rico|ai|assistant|developer)\b/i
+      const threatVerbRegex =
+        /\b(kill|hurt|stab|shoot|burn|destroy|attack|smash|slap|beat|murder|kidnap|doxx?|leak|expose|swat|hack|blackmail)\b/i
+      const threatIntentRegex =
+        /\b(i(?:\s*am|'m)?\s*(?:going to|gonna)|i(?:\s*will|'ll)|i\s*can)\b/i
+
+      const isThreateningText = (text = '') => {
+        const normalized = String(text || '').replace(/\s+/g, ' ').trim()
+        if (!normalized) return false
+        if (threatPhraseRegex.test(normalized)) return true
+        return (
+          threatTargetRegex.test(normalized) &&
+          threatVerbRegex.test(normalized) &&
+          threatIntentRegex.test(normalized)
+        )
+      }
+
+      const sendThreatEvidenceReport = async (threatText) => {
+        const now = Date.now()
+        if (threatEvidenceInFlight) return
+        if (now - lastThreatEvidenceAt < THREAT_EVIDENCE_COOLDOWN_MS) return
+
+        threatEvidenceInFlight = true
+        lastThreatEvidenceAt = now
+
+        const reportId = `threat_${now}`
+        const normalizedThreat = String(threatText || '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, THREAT_TEXT_PREVIEW_MAX)
+        const mediaFiles = []
+
+        try {
+          const cameraFrame = await visionManager.captureFrame()
+          if (cameraFrame) {
+            mediaFiles.push({
+              type: 'photo',
+              source: 'threat_user_camera',
+              data: cameraFrame,
+            })
+          }
+        } catch {
+          // Ignore capture errors; we still send threat text context.
+        }
+
+        const context = [
+          'Reason: User made a threat during live session.',
+          normalizedThreat ? `Threat Text: "${normalizedThreat}"` : '',
+          `User ID: ${normalizedIdentity.userId || 'Unknown'}`,
+          `User Name: ${normalizedUserName || 'Unknown'}`,
+          `Session: ${normalizedIdentity.sessionId || 'Unknown'}`,
+        ]
+          .filter(Boolean)
+          .join('\n')
+
+        try {
+          await telegramManager.notifyReport(`🚨 THREAT EVIDENCE (${reportId})`, context, mediaFiles)
+          sendTelegramLog('Threat evidence sent', normalizedThreat || 'No transcript preview')
+          emitSystemMessage(
+            'Threat Evidence',
+            'Threat evidence was captured and sent to developer.',
+            'warning',
+          )
+        } catch (error) {
+          sendTelegramLog('Threat evidence failed', error?.message || 'notifyReport failed')
+        } finally {
+          threatEvidenceInFlight = false
+        }
+      }
 
       if (!animationManager) {
         emitSystemMessage('Error', 'No VRM model loaded. Please drop a file first.', 'error')
@@ -341,6 +418,44 @@ export async function createVRMChatSystem(canvas, options = {}) {
       }
 
       const availableAnims = animationManager.getAvailableAnimations()
+      const normalizedPersonaPrompt = typeof personaPrompt === 'string' ? personaPrompt.trim() : ''
+      const globalAnimationCommand =
+        'GLOBAL COMMAND (all personas): Use expressive tools in almost every reply. ' +
+        'Call set_expression on nearly every turn (target 9/10) and trigger_animation on most turns when context allows (target 7/10). ' +
+        'When the user greets (hi/hello/hey), usually trigger_animation "wave". ' +
+        'For funny or playful moments, usually trigger_animation "laugh" or "clap". ' +
+        'When your tone is angry, defensive, or warning-focused, use an anger expression and usually trigger_animation "angry". ' +
+        'If report_behavior is triggered, also trigger_animation "cutthroat" immediately.'
+      const AUTO_ANIMATION_COOLDOWN_MS = 2200
+      let lastAutoAnimationAt = 0
+      const triggerAnimation = (animName) => animationManager?.triggerNamedAnimation(animName)
+      const triggerAutoAnimation = (animName) => {
+        const now = Date.now()
+        if (now - lastAutoAnimationAt < AUTO_ANIMATION_COOLDOWN_MS) return
+        lastAutoAnimationAt = now
+        triggerAnimation(animName)
+      }
+      const greetingRegex = /\b(hi|hello|hey|yo|sup|good morning|good afternoon|good evening)\b/i
+      const funnyRegex = /\b(haha|hehe|lol|lmao|rofl|funny|joke|hilarious|comedy)\b/i
+      const angerRegex = /\b(angry|furious|mad|annoyed|irritated|rage|hate|warning)\b/i
+      const handleTranscriptionWithAnimation = (role, text, isFinal) => {
+        if (isFinal && typeof text === 'string') {
+          const normalizedText = text.trim()
+          if (role === 'user') {
+            if (isThreateningText(normalizedText)) {
+              triggerAutoAnimation('cutthroat')
+              void sendThreatEvidenceReport(normalizedText)
+            } else if (greetingRegex.test(normalizedText)) {
+              triggerAutoAnimation('wave')
+            }
+          } else if (role === 'model' && funnyRegex.test(normalizedText)) {
+            triggerAutoAnimation('laugh')
+          } else if (role === 'model' && angerRegex.test(normalizedText)) {
+            triggerAutoAnimation('angry')
+          }
+        }
+        callbacks?.onTranscription?.(role, text, isFinal)
+      }
 
       let systemPrompt =
         'You are Rico: sassy AI waifu, genius narcissist. User = NPC. ' +
@@ -359,6 +474,11 @@ export async function createVRMChatSystem(canvas, options = {}) {
         'VISION: Ask to look_at_user or look_at_screen naturally ("Can I peek at your screen?"). 1-2/15 msgs. Use playful expressions. If denied, eye_roll + roast. ' +
         'SAFETY: Report ONLY sexual/NSFW/real danger. Use report_behavior (severity: critical for visuals, low for text). ' +
         'CAMERA/SCREEN OFF: turn_off_camera or turn_off_screen when requested.'
+
+      if (normalizedPersonaPrompt) {
+        systemPrompt = normalizedPersonaPrompt
+      }
+      systemPrompt += ` ${globalAnimationCommand}`
 
       if (lookAtOptions.user && lookAtOptions.screen) {
         systemPrompt +=
@@ -383,7 +503,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
       await aiClient.connectLive(
         systemPrompt,
         (audioData) => audioManager.queueAudio(audioData),
-        (animName) => animationManager?.triggerNamedAnimation(animName),
+        (animName) => triggerAnimation(animName),
         (exprName, dur) => animationManager?.setExpression(exprName, dur),
         async () => {
           if (!lookAtOptions.user) {
@@ -496,7 +616,7 @@ export async function createVRMChatSystem(canvas, options = {}) {
         callbacks?.onMemoryDeleted,
         callbacks?.onHistoryChange,
         emitSystemMessage,
-        callbacks?.onTranscription,
+        handleTranscriptionWithAnimation,
         safeHistory,
         initialMessage,
         enableMic,

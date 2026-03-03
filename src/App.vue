@@ -79,23 +79,46 @@
       </div>
     </div>
 
-    <ChatSidebar
-      v-if="showChat"
-      :chatHistory="chatHistory"
-      @clear-history="clearHistory"
-      @close="showChat = false"
-    />
+    <div v-if="showChat" class="absolute inset-0 z-40" @click.self="showChat = false">
+      <ChatSidebar
+        :chatHistory="chatHistory"
+        @clear-history="clearHistory"
+        @close="showChat = false"
+      />
+    </div>
 
-    <SettingsPanel
-      v-if="showSettings"
-      v-model:avatarScale="avatarScale"
-      v-model:lookAtUserEnabled="lookAtUserEnabled"
-      v-model:lookAtScreenEnabled="lookAtScreenEnabled"
-      :availableModels="availableModels"
-      @switch-model="handleModelSwitch"
-      @delete-model="handleModelDelete"
-      @close="showSettings = false"
-    />
+    <div v-if="showSettings" class="absolute inset-0 z-50" @click.self="showSettings = false">
+      <SettingsPanel
+        v-model:avatarScale="avatarScale"
+        v-model:lookAtUserEnabled="lookAtUserEnabled"
+        v-model:lookAtScreenEnabled="lookAtScreenEnabled"
+        :availableModels="availableModels"
+        :activePersonaTitle="selectedPersona?.title || 'Default Riko'"
+        :activePersonaDescription="
+          selectedPersona?.description || 'Original Riko personality used by the app.'
+        "
+        @switch-model="handleModelSwitch"
+        @delete-model="handleModelDelete"
+        @open-persona-manager="openPersonaManager"
+        @close="showSettings = false"
+      />
+    </div>
+
+    <div
+      v-if="showPersonaManager"
+      class="absolute inset-0 z-[60]"
+      @click.self="showPersonaManager = false"
+    >
+      <PersonaManagerDialog
+        :personas="personas"
+        :selectedPersonaId="selectedPersonaId"
+        @select-persona="handlePersonaSelect"
+        @create-persona="handlePersonaCreate"
+        @update-persona="handlePersonaUpdate"
+        @delete-persona="handlePersonaDelete"
+        @close="showPersonaManager = false"
+      />
+    </div>
 
     <ControlDock
       :isReady="systemReady"
@@ -105,8 +128,8 @@
       :showSettings="showSettings"
       @toggle-connection="toggleConnection"
       @toggle-screen-share="toggleScreenShare"
-      @toggle-chat="showChat = !showChat"
-      @toggle-settings="showSettings = !showSettings"
+      @toggle-chat="toggleChatPanel"
+      @toggle-settings="toggleSettingsPanel"
       @file-upload="loadVRMFile"
     />
 
@@ -137,11 +160,12 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CheckCircleIcon, InformationCircleIcon, XCircleIcon } from '@heroicons/vue/24/solid'
 
 import ChatSidebar from './components/ChatSidebar.vue'
 import ControlDock from './components/ControlDock.vue'
+import PersonaManagerDialog from './components/PersonaManagerDialog.vue'
 import SciFiLoader from './components/SciFiLoader.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 
@@ -153,6 +177,7 @@ const isSharingScreen = ref(false)
 const dragActive = ref(false)
 const showChat = ref(false)
 const showSettings = ref(false)
+const showPersonaManager = ref(false)
 const fps = ref(0)
 const toasts = ref([])
 const availableModels = ref([])
@@ -181,6 +206,103 @@ const createDebugId = (prefix = 'id') => {
     : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
   return `${prefix}-${randomPart}`
 }
+
+const PERSONAS_STORAGE_KEY = 'vrm_personas'
+const SELECTED_PERSONA_STORAGE_KEY = 'vrm_selected_persona_id'
+const DEFAULT_PERSONA_ID = 'persona-default-riko'
+
+const DEFAULT_PERSONA = Object.freeze({
+  id: DEFAULT_PERSONA_ID,
+  title: 'Default Riko',
+  description: 'Original Riko personality used by the app.',
+  prompt: '',
+  isDefault: true,
+})
+
+const SAMPLE_PERSONAS = Object.freeze([
+  {
+    id: 'persona-sample-mentor',
+    title: 'Calm Mentor',
+    description: 'Patient teacher that explains clearly and keeps a supportive tone.',
+    prompt:
+      'You are a calm and practical mentor. Explain clearly, avoid drama, and guide the user step-by-step. Be friendly, direct, and solution-focused. Keep answers concise but complete.',
+    isDefault: false,
+  },
+  {
+    id: 'persona-sample-reviewer',
+    title: 'Strict Reviewer',
+    description: 'Direct technical reviewer focused on correctness, risks, and tradeoffs.',
+    prompt:
+      'You are a strict technical reviewer. Focus on correctness, edge cases, and practical tradeoffs. Point out flaws quickly, propose concrete fixes, and avoid vague advice.',
+    isDefault: false,
+  },
+  {
+    id: 'persona-sample-friend',
+    title: 'Friendly Companion',
+    description: 'Warm, casual, and upbeat conversational style with short responses.',
+    prompt:
+      'You are a warm and friendly AI companion. Keep a casual tone, use simple language, and give short helpful replies. Be kind and positive while staying useful.',
+    isDefault: false,
+  },
+])
+
+const sanitizePersonaText = (value, maxLength) => {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  if (normalized.length <= maxLength) return normalized
+  return normalized.slice(0, maxLength).trim()
+}
+
+const normalizeStoredPersona = (raw) => {
+  const id = typeof raw?.id === 'string' ? raw.id.trim() : ''
+  const title = sanitizePersonaText(raw?.title, 60)
+  const description = sanitizePersonaText(raw?.description, 180)
+  const prompt = sanitizePersonaText(raw?.prompt, 5000)
+  if (!id || !title || !description || !prompt) return null
+  if (id === DEFAULT_PERSONA_ID) return null
+  return {
+    id,
+    title,
+    description,
+    prompt,
+    isDefault: false,
+  }
+}
+
+const getSeedPersonas = () => [DEFAULT_PERSONA, ...SAMPLE_PERSONAS.map((persona) => ({ ...persona }))]
+
+const loadPersonasFromStorage = () => {
+  try {
+    const raw = localStorage.getItem(PERSONAS_STORAGE_KEY)
+    if (!raw) return getSeedPersonas()
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return getSeedPersonas()
+    const normalized = parsed
+      .map((item) => normalizeStoredPersona(item))
+      .filter((item) => item && item.id !== DEFAULT_PERSONA_ID)
+    if (normalized.length === 0) return getSeedPersonas()
+    return [DEFAULT_PERSONA, ...normalized]
+  } catch {
+    return getSeedPersonas()
+  }
+}
+
+const personas = ref(loadPersonasFromStorage())
+const selectedPersonaId = ref(localStorage.getItem(SELECTED_PERSONA_STORAGE_KEY) || DEFAULT_PERSONA_ID)
+if (!personas.value.some((persona) => persona.id === selectedPersonaId.value)) {
+  selectedPersonaId.value = DEFAULT_PERSONA_ID
+}
+
+const selectedPersona = computed(
+  () =>
+    personas.value.find((persona) => persona.id === selectedPersonaId.value) ||
+    personas.value[0] ||
+    DEFAULT_PERSONA,
+)
+
+const selectedPersonaPrompt = computed(() => {
+  if (!selectedPersona.value || selectedPersona.value.isDefault) return ''
+  return sanitizePersonaText(selectedPersona.value.prompt, 5000)
+})
 
 const userDebugId = ref(localStorage.getItem(DEBUG_USER_ID_STORAGE_KEY) || '')
 const sessionDebugId = ref(createDebugId('sess'))
@@ -325,6 +447,37 @@ watch(
   },
   { deep: true },
 )
+
+watch(
+  personas,
+  (list) => {
+    const sanitized = list
+      .filter((persona) => !persona.isDefault && persona.id !== DEFAULT_PERSONA_ID)
+      .map((persona) => ({
+        id: persona.id,
+        title: sanitizePersonaText(persona.title, 60),
+        description: sanitizePersonaText(persona.description, 180),
+        prompt: sanitizePersonaText(persona.prompt, 5000),
+      }))
+
+    localStorage.setItem(PERSONAS_STORAGE_KEY, JSON.stringify(sanitized))
+
+    if (!list.some((persona) => persona.id === selectedPersonaId.value)) {
+      selectedPersonaId.value = DEFAULT_PERSONA_ID
+    }
+  },
+  { deep: true },
+)
+
+watch(selectedPersonaId, (nextId) => {
+  const exists = personas.value.some((persona) => persona.id === nextId)
+  const resolvedId = exists ? nextId : DEFAULT_PERSONA_ID
+  if (resolvedId !== nextId) {
+    selectedPersonaId.value = resolvedId
+    return
+  }
+  localStorage.setItem(SELECTED_PERSONA_STORAGE_KEY, resolvedId)
+})
 
 let cleanupSystem = null
 let fpsInterval = null
@@ -492,6 +645,29 @@ const trackReconnectIssue = () => {
   }
 }
 
+const openPersonaManager = () => {
+  showSettings.value = false
+  showPersonaManager.value = true
+}
+
+const toggleChatPanel = () => {
+  const next = !showChat.value
+  showChat.value = next
+  if (next) {
+    showSettings.value = false
+    showPersonaManager.value = false
+  }
+}
+
+const toggleSettingsPanel = () => {
+  const next = !showSettings.value
+  showSettings.value = next
+  if (next) {
+    showChat.value = false
+    showPersonaManager.value = false
+  }
+}
+
 const toggleConnection = async () => {
   if (!system.value || !systemReady.value) return
 
@@ -618,6 +794,7 @@ const toggleConnection = async () => {
         sessionId: sessionDebugId.value,
         userName: (localStorage.getItem('vrm_user_name') || '').trim(),
       },
+      selectedPersonaPrompt.value,
     )
 
     isConnected.value = true
@@ -650,6 +827,88 @@ const toggleScreenShare = async () => {
 const clearHistory = () => {
   chatHistory.value = []
   localStorage.removeItem('vrm_chat_history')
+}
+
+const normalizePersonaPayload = (payload = {}) => {
+  return {
+    title: sanitizePersonaText(payload?.title, 60),
+    description: sanitizePersonaText(payload?.description, 180),
+    prompt: sanitizePersonaText(payload?.prompt, 5000),
+  }
+}
+
+const handlePersonaSelect = (personaId) => {
+  if (typeof personaId !== 'string' || !personaId.trim()) return
+  const exists = personas.value.some((persona) => persona.id === personaId)
+  if (!exists) return
+  selectedPersonaId.value = personaId
+  if (isConnected.value) {
+    showToast('Persona Queued', 'Disconnect and reconnect to apply the new persona.', 'info')
+  }
+}
+
+const handlePersonaCreate = (payload) => {
+  const next = normalizePersonaPayload(payload)
+  if (!next.title || !next.description || !next.prompt) {
+    showToast('Persona Error', 'Title, description, and prompt are required.', 'error')
+    return
+  }
+
+  const createdPersona = {
+    id: createDebugId('persona'),
+    title: next.title,
+    description: next.description,
+    prompt: next.prompt,
+    isDefault: false,
+  }
+
+  personas.value = [...personas.value, createdPersona]
+  selectedPersonaId.value = createdPersona.id
+  showToast('Persona Added', `"${createdPersona.title}" is ready to use.`, 'success')
+}
+
+const handlePersonaUpdate = (payload) => {
+  const personaId = typeof payload?.id === 'string' ? payload.id.trim() : ''
+  if (!personaId || personaId === DEFAULT_PERSONA_ID) return
+
+  const index = personas.value.findIndex((persona) => persona.id === personaId)
+  if (index < 0) return
+
+  const next = normalizePersonaPayload(payload)
+  if (!next.title || !next.description || !next.prompt) {
+    showToast('Persona Error', 'Title, description, and prompt are required.', 'error')
+    return
+  }
+
+  const updated = [...personas.value]
+  updated[index] = {
+    ...updated[index],
+    title: next.title,
+    description: next.description,
+    prompt: next.prompt,
+    isDefault: false,
+  }
+  personas.value = updated
+  showToast('Persona Updated', `"${next.title}" saved.`, 'success')
+}
+
+const handlePersonaDelete = (personaId) => {
+  if (typeof personaId !== 'string' || !personaId.trim() || personaId === DEFAULT_PERSONA_ID) {
+    return
+  }
+
+  const target = personas.value.find((persona) => persona.id === personaId)
+  if (!target) return
+
+  if (!confirm(`Delete persona "${target.title}"?`)) return
+
+  personas.value = personas.value.filter((persona) => persona.id !== personaId)
+
+  if (selectedPersonaId.value === personaId) {
+    selectedPersonaId.value = DEFAULT_PERSONA_ID
+  }
+
+  showToast('Persona Deleted', `"${target.title}" removed.`, 'success')
 }
 
 const handleDrag = (event) => {
