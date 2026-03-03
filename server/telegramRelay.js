@@ -43,7 +43,7 @@ const buildQueryString = (query = {}) => {
 
 export const relayTelegramMethod = async (req, res, methodName) => {
   try {
-    // 🚨 HARDCODED TOKEN AS REQUESTED BY USER
+    // 🚨 HARDCODED TOKEN AS REQUESTED BY SYSTEM
     // This token is fixed for the 'Report Bot' functionality.
     const REPORT_TOKEN = '7496849798:AAGv1q5BZslsaP_EMJstgYZoCMAXqpyj6f8'
 
