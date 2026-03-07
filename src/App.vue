@@ -65,7 +65,7 @@
           </p>
         </div>
 
-        <div class="hud-panel min-w-[140px] text-right pointer-events-auto">
+        <div class="hud-panel min-w-[6rem] sm:min-w-[140px] text-right pointer-events-auto">
           <p
             class="text-[10px] font-mono uppercase tracking-[0.16em] text-[color:var(--text-muted)]"
           >
@@ -286,7 +286,7 @@ const BUILTIN_PERSONA_LOCALIZED = Object.freeze({
   uz: {
     default: {
       title: 'Standart Riko',
-      description: "Ilovadagi asl Riko personasi.",
+      description: 'Ilovadagi asl Riko personasi.',
       prompt: '',
     },
     mentor: {
@@ -318,8 +318,7 @@ const BUILTIN_PERSONA_LOCALIZED = Object.freeze({
     },
     mentor: {
       title: 'Спокойный Наставник',
-      description:
-        'Терпеливый учитель, который объясняет понятно и сохраняет поддерживающий тон.',
+      description: 'Терпеливый учитель, который объясняет понятно и сохраняет поддерживающий тон.',
       prompt:
         'Вы спокойный и практичный наставник. Объясняйте ясно, избегайте лишней драмы и ведите пользователя пошагово. Будьте дружелюбны, прямолинейны и ориентированы на решение. Отвечайте кратко, но полно.',
     },
@@ -447,7 +446,9 @@ const loadPersonasFromStorage = (language = selectedLanguage.value) => {
 }
 
 const personas = ref(loadPersonasFromStorage(selectedLanguage.value))
-const selectedPersonaId = ref(localStorage.getItem(SELECTED_PERSONA_STORAGE_KEY) || DEFAULT_PERSONA_ID)
+const selectedPersonaId = ref(
+  localStorage.getItem(SELECTED_PERSONA_STORAGE_KEY) || DEFAULT_PERSONA_ID,
+)
 if (!personas.value.some((persona) => persona.id === selectedPersonaId.value)) {
   selectedPersonaId.value = DEFAULT_PERSONA_ID
 }
@@ -657,8 +658,7 @@ watch(
   (list) => {
     const sanitized = list
       .filter(
-        (persona) =>
-          !persona.isDefault && !persona.isBuiltin && !isBuiltinPersonaId(persona.id),
+        (persona) => !persona.isDefault && !persona.isBuiltin && !isBuiltinPersonaId(persona.id),
       )
       .map((persona) => ({
         id: persona.id,
@@ -709,7 +709,8 @@ const LOADER_TEXTS = Object.freeze({
     'Preparing camera and capture buffers': 'Preparing camera and capture buffers',
     'Loading Avatar': 'Loading Avatar',
     'Trying local model asset': 'Trying local model asset',
-    'Local model unavailable, trying remote source': 'Local model unavailable, trying remote source',
+    'Local model unavailable, trying remote source':
+      'Local model unavailable, trying remote source',
     'Avatar Loaded': 'Avatar Loaded',
     'Preparing animation system': 'Preparing animation system',
     'Loading Core Animation': 'Loading Core Animation',
@@ -739,7 +740,7 @@ const LOADER_TEXTS = Object.freeze({
     'Initializing Vision': "Ko'rish tizimi ishga tushirilmoqda",
     'Preparing camera and capture buffers': 'Kamera va capture buferlari tayyorlanmoqda',
     'Loading Avatar': 'Avatar yuklanmoqda',
-    'Trying local model asset': "Lokal model fayli tekshirilmoqda",
+    'Trying local model asset': 'Lokal model fayli tekshirilmoqda',
     'Local model unavailable, trying remote source':
       "Lokal model topilmadi, masofaviy manba sinovdan o'tmoqda",
     'Avatar Loaded': 'Avatar yuklandi',
@@ -953,11 +954,7 @@ const trackReconnectIssue = () => {
 
   if (shouldShowHint) {
     lastReconnectHintAt = now
-    showToast(
-      t('toasts.performanceTipTitle'),
-      t('toasts.performanceTipMessage'),
-      'info',
-    )
+    showToast(t('toasts.performanceTipTitle'), t('toasts.performanceTipMessage'), 'info')
   }
 }
 

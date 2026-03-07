@@ -79,7 +79,7 @@ textarea {
 }
 
 .hud-panel {
-  min-width: 220px;
+  min-width: max(120px, 14vw);
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 12px 14px;
@@ -661,7 +661,8 @@ textarea {
 @media (max-width: 640px) {
   .hud-panel {
     min-width: 0;
-    padding: 10px 12px;
+    padding: 8px 10px;
+    border-radius: 12px;
   }
 
   .dock-btn {

@@ -82,7 +82,7 @@
 
       <!-- Ring 4: Outer Data Field -->
       <div
-        class="absolute h-[420px] w-[420px] rounded-full border border-white/5 opacity-50 animate-spin-slow-reverse"
+        class="ring-outer absolute rounded-full border border-white/5 opacity-50 animate-spin-slow-reverse"
       >
         <!-- Orbiting Data Points -->
         <div class="absolute top-1/2 -left-1 h-2 w-1 bg-cyan-400 shadow-[0_0_15px_cyan]"></div>
@@ -92,7 +92,7 @@
       </div>
 
       <!-- Floating Particles -->
-      <div class="absolute h-[600px] w-[600px] pointer-events-none">
+      <div class="particle-field absolute pointer-events-none">
         <div
           v-for="n in 12"
           :key="n"
@@ -123,13 +123,13 @@
 
       <!-- Glitch Text -->
       <h1
-        class="glitch-text text-5xl sm:text-6xl font-black tracking-[0.25em] text-white font-mono drop-shadow-[0_0_20px_rgba(6,182,212,1)]"
+        class="glitch-text text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-black tracking-[0.15em] sm:tracking-[0.25em] text-white font-mono drop-shadow-[0_0_20px_rgba(6,182,212,1)]"
         data-text="QUANTUM SYNC AI"
       >
         QUANTUM AI SYNC
       </h1>
 
-      <div class="w-[420px] space-y-3 relative">
+      <div class="w-[min(420px,calc(100vw-2rem))] space-y-3 relative">
         <!-- Tech Progress Bar -->
         <div
           class="relative h-2 w-full bg-white/5 overflow-hidden clip-tech backdrop-blur-sm border-x border-cyan-500/30"
@@ -205,6 +205,30 @@ defineProps({
 }
 .transform-style-3d {
   transform-style: preserve-3d;
+}
+
+/* Responsive ring + particle container */
+.ring-outer {
+  width: clamp(220px, 55vmin, 420px);
+  height: clamp(220px, 55vmin, 420px);
+}
+.particle-field {
+  width: clamp(300px, 80vmin, 600px);
+  height: clamp(300px, 80vmin, 600px);
+}
+
+/* Responsive reactor rings */
+.reactor-core > .absolute.h-48 {
+  width: clamp(100px, 25vmin, 192px);
+  height: clamp(100px, 25vmin, 192px);
+}
+.reactor-core > .absolute.h-64 {
+  width: clamp(130px, 33vmin, 256px);
+  height: clamp(130px, 33vmin, 256px);
+}
+.reactor-core > .absolute.h-72 {
+  width: clamp(150px, 37vmin, 288px);
+  height: clamp(150px, 37vmin, 288px);
 }
 .rotate-x-70 {
   transform: rotateX(70deg) scale(3);

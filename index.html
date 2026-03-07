@@ -5,6 +5,111 @@
     <link rel="icon" href="/image.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Riko | Quantum</title>
+
+    <!-- ╔══════════════════════════════════════════════════════╗
+         ║  DevTools Guard — controlled by VITE_BLOCK_DEVTOOLS  ║
+         ║  Set to "true" in .env to enable on production.      ║
+         ╚══════════════════════════════════════════════════════╝ -->
+    <script>
+      ;(function () {
+        var _enabled = '%VITE_BLOCK_DEVTOOLS%'
+        if (_enabled !== 'true') return
+
+        /* ── 1. Silently swallow all devtools keyboard shortcuts ─
+           Keys do NOTHING — no overlay, no alert, just preventDefault. */
+        document.addEventListener('keydown', function (e) {
+          var k = e.key
+          var ctrl = e.ctrlKey || e.metaKey
+          // F12
+          if (k === 'F12') { e.preventDefault(); e.stopImmediatePropagation(); return false }
+          // Ctrl+Shift+I/J/C/K  (Inspector, Console, Elements, etc.)
+          if (ctrl && e.shiftKey && ['I','i','J','j','C','c','K','k'].indexOf(k) !== -1) {
+            e.preventDefault(); e.stopImmediatePropagation(); return false
+          }
+          // Ctrl+U (view-source)
+          if (ctrl && (k === 'u' || k === 'U')) { e.preventDefault(); e.stopImmediatePropagation(); return false }
+        }, true)
+
+        /* ── 2. Silently block right-click ───────────────────── */
+        document.addEventListener('contextmenu', function (e) {
+          e.preventDefault(); e.stopImmediatePropagation(); return false
+        }, true)
+
+        /* ── 3. ACTUAL DETECTION → wipe DOM + overlay + reload ── */
+        var _triggered = false
+
+        function _onDevToolsDetected() {
+          if (_triggered) return
+          _triggered = true
+
+          /* a) Kill every child node in <html> except our overlay */
+          try {
+            var nodes = Array.prototype.slice.call(document.documentElement.childNodes)
+            nodes.forEach(function (n) { n.parentNode && n.parentNode.removeChild(n) })
+          } catch (_) {}
+
+          /* b) Build the block overlay on the now-clean <html> */
+          var overlay = document.createElement('div')
+          overlay.style.cssText = [
+            'position:fixed','inset:0','z-index:2147483647',
+            'background:#060608',
+            'display:flex','flex-direction:column',
+            'align-items:center','justify-content:center',
+            'font-family:system-ui,monospace','color:#ff4444',
+            'cursor:default','user-select:none',
+          ].join(';')
+          overlay.innerHTML =
+            '<div style="font-size:5rem;animation:_spin 2s linear infinite">🔒</div>' +
+            '<div style="font-size:1.5rem;margin-top:1.2rem;color:#fff;font-weight:700">Access Restricted</div>' +
+            '<div style="font-size:.9rem;margin-top:.6rem;color:#777;max-width:320px;text-align:center">' +
+              'Developer tools detected. This page has been secured.' +
+            '</div>' +
+            '<style>' +
+              '@keyframes _spin{0%{transform:scale(1)}50%{transform:scale(1.2)}100%{transform:scale(1)}}' +
+              'body,html{margin:0;padding:0;overflow:hidden;background:#060608}' +
+            '</style>'
+          document.documentElement.appendChild(overlay)
+
+          /* c) Reload after 3 s — clears any cached devtools state */
+          setTimeout(function () { window.location.reload(true) }, 3000)
+        }
+
+        /* ── Detection method A: window outer/inner size diff ─── */
+        var _sizeThreshold = 160
+        function _checkSize() {
+          if (_triggered) return
+          var dw = window.outerWidth  - window.innerWidth
+          var dh = window.outerHeight - window.innerHeight
+          if (dw > _sizeThreshold || dh > _sizeThreshold) _onDevToolsDetected()
+        }
+        setInterval(_checkSize, 800)
+        window.addEventListener('resize', _checkSize)
+
+        /* ── Detection method B: custom toString() trap ──────────
+           Chrome calls .toString() on logged objects when devtools
+           is open and the Console tab is visible.               */
+        var _trap = /./
+        _trap.toString = function () {
+          _onDevToolsDetected()
+          return ''
+        }
+        setInterval(function () {
+          if (!_triggered) console.log('%c', _trap)
+        }, 1500)
+
+        /* ── Detection method C: performance timing debugger trap ─
+           `debugger` statements take near-zero time when devtools
+           is closed, but take measurable time when DevTools is open. */
+        setInterval(function () {
+          if (_triggered) return
+          var t0 = performance.now()
+          // eslint-disable-next-line no-debugger
+          debugger // jshint ignore:line
+          if (performance.now() - t0 > 80) _onDevToolsDetected()
+        }, 2000)
+
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>
@@ -12,3 +117,172 @@
   </body>
 </html>
 
+
+    <!-- ╔══════════════════════════════════════════════════════╗
+         ║  DevTools Guard — controlled by VITE_BLOCK_DEVTOOLS  ║
+         ║  Set to "true" in .env to enable blocking.           ║
+         ╚══════════════════════════════════════════════════════╝ -->
+    <script>
+      ;(function () {
+        // Injected at build time by Vite from VITE_BLOCK_DEVTOOLS in .env
+        var _enabled = '%VITE_BLOCK_DEVTOOLS%'
+        if (_enabled !== 'true') return // toggle is OFF — do nothing
+
+        /* ── Overlay helper ───────────────────────────────────── */
+        var _blocked = false
+        function _block() {
+          if (_blocked) return
+          _blocked = true
+          document.documentElement.style.cssText =
+            'pointer-events:none!important;user-select:none!important;'
+          var el = document.createElement('div')
+          el.id = '_devblock'
+          el.style.cssText = [
+            'position:fixed',
+            'inset:0',
+            'z-index:2147483647',
+            'background:#0a0a0f',
+            'display:flex',
+            'flex-direction:column',
+            'align-items:center',
+            'justify-content:center',
+            'font-family:monospace',
+            'color:#ff4444',
+          ].join(';')
+          el.innerHTML =
+            '<div style="font-size:4rem">🔒</div>' +
+            '<div style="font-size:1.4rem;margin-top:1rem;color:#fff">Access Restricted</div>' +
+            '<div style="font-size:.85rem;margin-top:.5rem;color:#888">Developer tools are not permitted on this page.</div>'
+          // Append immediately if body exists, otherwise wait
+          if (document.body) document.body.appendChild(el)
+          else
+            document.addEventListener('DOMContentLoaded', function () {
+              document.body.appendChild(el)
+            })
+        }
+
+        /* ── 1. Keyboard shortcuts ────────────────────────────── */
+        document.addEventListener(
+          'keydown',
+          function (e) {
+            var k = e.key
+            // F12
+            if (k === 'F12') {
+              e.preventDefault()
+              e.stopImmediatePropagation()
+              _block()
+              return false
+            }
+            // Ctrl/Cmd + Shift + I / J / C / K
+            if (
+              (e.ctrlKey || e.metaKey) &&
+              e.shiftKey &&
+              ['I', 'i', 'J', 'j', 'C', 'c', 'K', 'k'].indexOf(k) !== -1
+            ) {
+              e.preventDefault()
+              e.stopImmediatePropagation()
+              _block()
+              return false
+            }
+            // Ctrl + U (view source)
+            if ((e.ctrlKey || e.metaKey) && (k === 'u' || k === 'U')) {
+              e.preventDefault()
+              e.stopImmediatePropagation()
+              return false
+            }
+            // Ctrl + Shift + Delete (clear data shortcut in some browsers)
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && (k === 'Delete' || k === 'Del')) {
+              e.preventDefault()
+              e.stopImmediatePropagation()
+              return false
+            }
+          },
+          true,
+        )
+
+        /* ── 2. Right-click context menu ─────────────────────── */
+        document.addEventListener(
+          'contextmenu',
+          function (e) {
+            e.preventDefault()
+            e.stopImmediatePropagation()
+            return false
+          },
+          true,
+        )
+
+        /* ── 3. Window-size devtools detection ───────────────── */
+        var _threshold = 160
+        function _checkSize() {
+          var ww = window.outerWidth - window.innerWidth
+          var wh = window.outerHeight - window.innerHeight
+          if (ww > _threshold || wh > _threshold) _block()
+        }
+        setInterval(_checkSize, 1000)
+        window.addEventListener('resize', _checkSize)
+
+        /* ── 4. console.log / debugger trap ──────────────────── */
+        try {
+          var _devCheck = /./
+          _devCheck.toString = function () {
+            _block()
+            return ''
+          }
+          // In Chrome, logging an object with a custom toString triggers it when devtools is open
+          setInterval(function () {
+            console.log('%c', _devCheck)
+          }, 2000)
+        } catch (_) {}
+
+        /* ── 5. Disable text selection & drag ────────────────── */
+        document.addEventListener(
+          'selectstart',
+          function (e) {
+            e.preventDefault()
+          },
+          true,
+        )
+        document.addEventListener(
+          'dragstart',
+          function (e) {
+            e.preventDefault()
+          },
+          true,
+        )
+
+        /* ── 6. Override console methods (silent) ────────────── */
+        try {
+          var _noop = function () {}
+          ;[
+            'log',
+            'warn',
+            'error',
+            'info',
+            'debug',
+            'table',
+            'dir',
+            'dirxml',
+            'trace',
+            'group',
+            'groupCollapsed',
+            'groupEnd',
+            'time',
+            'timeEnd',
+            'assert',
+            'profile',
+            'profileEnd',
+            'count',
+          ].forEach(function (m) {
+            try {
+              console[m] = _noop
+            } catch (_) {}
+          })
+        } catch (_) {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

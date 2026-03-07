@@ -69,6 +69,10 @@ export class SceneManager {
       this.controls.enablePan = false
       this.controls.minDistance = 1.0
       this.controls.maxDistance = 5.0
+
+      // Lock vertical rotation (Polar angle) to horizontal only
+      this.controls.maxPolarAngle = Math.PI / 2
+
       this.controls.update()
 
       this.setupResizeHandler()
